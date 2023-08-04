@@ -53,3 +53,4 @@ CATKIN_IGNORE
 # Ros build
 log/
 install/
+spectacularAI/

@@ -389,11 +389,9 @@ def generate_launch_description():
                         {'leftFeatureTracker': True} # Must be enabled
                         ])
 
-    rectify_rviz = os.path.join(depthai_examples_path,
-                                'rviz', 'stereoInertial.rviz')
     rviz_node = launch_ros.actions.Node(
         package='rviz2', executable='rviz2', output='screen',
-        arguments=['--display-config', rectify_rviz],
+        arguments=['--display-config', 'spectacularai_ros2/launch/stereo_inertial.rviz'],
         condition=IfCondition(enableRviz))
 
     # TODO: DepthAI ROS node should publish these instead
