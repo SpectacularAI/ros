@@ -2,16 +2,7 @@
 
 set -eux
 
-: "${BUILD_TYPE:=Release}"
-: "${CC:=clang}"
-: "${CXX:=clang++}"
-: "${BUILD_SLAM:=ON}"
-: "${USE_CCACHE:=ON}"
-
 ROOT=$(pwd)
-
-export CC
-export CXX
 
 cd $ROOT/spectacularai_ros2
 # sudo rosdep init

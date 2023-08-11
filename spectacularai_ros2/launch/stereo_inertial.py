@@ -14,12 +14,40 @@ import launch_ros.descriptions
 
 
 def readCameraCalibrationFromDevice():
+    import math
     import depthai
     import numpy as np
-    from scipy.spatial.transform import Rotation
+    def matrix_to_quaternion(matrix):
+        trace = matrix[0][0] + matrix[1][1] + matrix[2][2]
+        if trace > 0:
+            S = math.sqrt(trace + 1.0) * 2
+            qw = 0.25 * S
+            qx = (matrix[2][1] - matrix[1][2]) / S
+            qy = (matrix[0][2] - matrix[2][0]) / S
+            qz = (matrix[1][0] - matrix[0][1]) / S
+        elif matrix[0][0] > matrix[1][1] and matrix[0][0] > matrix[2][2]:
+            S = math.sqrt(1.0 + matrix[0][0] - matrix[1][1] - matrix[2][2]) * 2
+            qw = (matrix[2][1] - matrix[1][2]) / S
+            qx = 0.25 * S
+            qy = (matrix[0][1] + matrix[1][0]) / S
+            qz = (matrix[0][2] + matrix[2][0]) / S
+        elif matrix[1][1] > matrix[2][2]:
+            S = math.sqrt(1.0 + matrix[1][1] - matrix[0][0] - matrix[2][2]) * 2
+            qw = (matrix[0][2] - matrix[2][0]) / S
+            qx = (matrix[0][1] + matrix[1][0]) / S
+            qy = 0.25 * S
+            qz = (matrix[1][2] + matrix[2][1]) / S
+        else:
+            S = math.sqrt(1.0 + matrix[2][2] - matrix[0][0] - matrix[1][1]) * 2
+            qw = (matrix[1][0] - matrix[0][1]) / S
+            qx = (matrix[0][2] + matrix[2][0]) / S
+            qy = (matrix[1][2] + matrix[2][1]) / S
+            qz = 0.25 * S
+
+        return np.array([qx, qy, qz, qw])
+
     def toStaticParams(imuToCam):
-        R = Rotation.from_matrix(imuToCam[0:3, 0:3])
-        q = R.as_quat()
+        q = matrix_to_quaternion(imuToCam[0:3, 0:3])
         CM_TO_M = 0.01
         # x y z qx qy qz qw frame_id child_frame_id
         return [str(i * CM_TO_M) for i in imuToCam[:3, 3].tolist()] + [str(i) for i in q.tolist()]
@@ -28,6 +56,9 @@ def readCameraCalibrationFromDevice():
         imuToCam0 = np.array(calibData.getImuToCameraExtrinsics(depthai.CameraBoardSocket.CAM_B))
         cam0ToCam1 = np.array(calibData.getCameraExtrinsics(depthai.CameraBoardSocket.CAM_B, depthai.CameraBoardSocket.CAM_C))
         imuToCam1 = np.matmul(cam0ToCam1, imuToCam0)
+        device.close()
+        import time
+        time.sleep(3) # Ensure device is free to be used
         return (
             toStaticParams(imuToCam0),
             toStaticParams(imuToCam1)
@@ -409,6 +440,8 @@ def generate_launch_description():
                 {"depth_scale": 1.0/1000.0},
                 {"camera_input_type": "stereo_depth_features"},
                 # {"recording_folder": "data/test_01"},
+                {"enable_mapping": True},
+                {"enable_occupancy_grid": True},
             ],
             remappings=[
                 ('input/imu', 'imu'),

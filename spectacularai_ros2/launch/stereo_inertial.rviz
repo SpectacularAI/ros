@@ -10,6 +10,7 @@ Panels:
         - /Odometry1/Shape1
         - /Odometry1/Covariance1
         - /PointCloud21
+        - /Map1
       Splitter Ratio: 0.5
     Tree Height: 845
   - Class: rviz_common/Selection
@@ -138,6 +139,27 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+    - Alpha: 0.699999988079071
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: false
+      Enabled: true
+      Name: Map
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /output/occupancyGrid
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /output/occupancyGrid_updates
+      Use Timestamp: false
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -184,7 +206,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 10
+      Distance: 4.2609357833862305
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -199,10 +221,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.8603986501693726
+      Pitch: 1.0147968530654907
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 2.5603959560394287
+      Yaw: 3.420397996902466
     Saved: ~
 Window Geometry:
   Displays:
