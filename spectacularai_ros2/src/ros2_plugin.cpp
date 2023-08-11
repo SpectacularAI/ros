@@ -466,7 +466,7 @@ struct OccupancyMap {
 
 } // namespace
 
-namespace spectacularai {
+namespace spectacularAI {
 namespace ros2 {
 
 class Ros2WrapperImpl : public Ros2Wrapper {

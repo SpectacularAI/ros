@@ -3,7 +3,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 
-namespace spectacularai {
+namespace spectacularAI {
 namespace ros2 {
 
 class Ros2Wrapper : public rclcpp::Node {
