@@ -296,11 +296,37 @@ struct OccupancyMap {
     }
 
     void traceFreeSpace(const spectacularAI::Vector3f &start, const spectacularAI::mapping::Frame &frame, float cameraTestHeight) {
-        // TODO: Trace circle instead
-        for (int i = 0; i < width; i++) trace(start, frame, cameraTestHeight, i, 0); // Bottom
-        for (int i = 0; i < width; i++) trace(start, frame, cameraTestHeight, i, height - 1); // Top
-        for (int i = 1; i < height - 1; i++) trace(start, frame, cameraTestHeight, 0, i); // Left, skip corners
-        for (int i = 1; i < height - 1; i++) trace(start, frame, cameraTestHeight, width - 1, i); // Right, skip corners
+        // Midpoint circle algorithm
+        int x0, y0;
+        if (!getIdx(start, x0, y0)) return;
+        int radius = maxTraceDepth;
+        int f = 1 - radius;
+        int ddf_x = 1;
+        int ddf_y = -2 * radius;
+        int x = 0;
+        int y = radius;
+        trace(start, frame, cameraTestHeight, x0, y0 + radius);
+        trace(start, frame, cameraTestHeight, x0, y0 - radius);
+        trace(start, frame, cameraTestHeight, x0 + radius, y0);
+        trace(start, frame, cameraTestHeight, x0 - radius, y0);
+        while (x < y) {
+            if (f >= 0) {
+                y -= 1;
+                ddf_y += 2;
+                f += ddf_y;
+            }
+            x += 1;
+            ddf_x += 2;
+            f += ddf_x;
+            trace(start, frame, cameraTestHeight, x0 + x, y0 + y);
+            trace(start, frame, cameraTestHeight, x0 - x, y0 + y);
+            trace(start, frame, cameraTestHeight, x0 + x, y0 - y);
+            trace(start, frame, cameraTestHeight, x0 - x, y0 - y);
+            trace(start, frame, cameraTestHeight, x0 + y, y0 + x);
+            trace(start, frame, cameraTestHeight, x0 - y, y0 + x);
+            trace(start, frame, cameraTestHeight, x0 + y, y0 - x);
+            trace(start, frame, cameraTestHeight, x0 - y, y0 - x);
+        }
     }
 
     void trace(const spectacularAI::Vector3f &start, const spectacularAI::mapping::Frame &frame, float cameraTestHeight, int targetX, int targetY) {
@@ -319,11 +345,12 @@ struct OccupancyMap {
         float lowerY = frame.image->getWidth() * SAFETY_MARGIN;
         if (!frame.cameraPose.worldToPixel({target.x, target.y, target.z}, tempPixel)) return;
         if (tempPixel.x < lowerX || tempPixel.y < lowerY || tempPixel.x > upperX || tempPixel.y > upperY) return;
-        trace(start, target);
+        trace(start, target, targetX, targetY);
     }
 
     // Trace ray and mark unoccupied cells
-    void trace(const spectacularAI::Vector3f &start, const spectacularAI::Vector3f &target) {
+    void trace(const spectacularAI::Vector3f &start, const spectacularAI::Vector3f &target, int targetX, int targetY) {
+        // Fast Voxel Traversal
         spectacularAI::Vector3f dir = {
             target.x - start.x,
             target.y - start.y,
@@ -338,25 +365,9 @@ struct OccupancyMap {
             start.y - originY * cellSize + dir.y * minTraceDepth,
             0.0f
         };
-        // spectacularAI::Vector3f targetLocal = {
-        //     target.x - originX * cellSize,
-        //     target.y - originY * cellSize,
-        //     0.0f
-        // };
-        spectacularAI::Vector3f targetLocal = {
-            startLocal.x + dir.x * (maxTraceDepth - minTraceDepth - cellSize),
-            startLocal.y + dir.y * (maxTraceDepth - minTraceDepth - cellSize),
-            0.0f
-        };
 
-        // Fast Voxel Traversal
         int currentX = int(startLocal.x / cellSize);
         int currentY = int(startLocal.y / cellSize);
-        int endX = int(targetLocal.x / cellSize);
-        int endY = int(targetLocal.y / cellSize);
-
-        float fractStartX = fract(startLocal.x / cellSize);
-        float fractStartY = fract(startLocal.y / cellSize);
 
         int stepX = dir.x > 0 ? 1 : -1;
         int stepY = dir.y > 0 ? 1 : -1;
@@ -364,17 +375,17 @@ struct OccupancyMap {
         float tMaxX, tMaxY;
 
         if (dir.x == 0) tMaxX = std::numeric_limits<float>::infinity();
-        else if (dir.x > 0) tMaxX = (1.0f - fractStartX) / dir.x;
-        else tMaxX = fractStartX / -dir.x;
+        else if (dir.x > 0) tMaxX = (1.0f - fract(startLocal.x / cellSize)) / dir.x;
+        else tMaxX = fract(startLocal.x / cellSize) / -dir.x;
 
         if (dir.y == 0) tMaxY = std::numeric_limits<float>::infinity();
-        else if (dir.y > 0) tMaxY = (1.0f - fractStartY) / dir.y;
-        else tMaxY = fractStartY / -dir.y;
+        else if (dir.y > 0) tMaxY = (1.0f - fract(startLocal.y / cellSize)) / dir.y;
+        else tMaxY = fract(startLocal.y / cellSize) / -dir.y;
 
         float tDeltaX = std::abs(1.0 / dir.x);
         float tDeltaY = std::abs(1.0 / dir.y);
 
-        while (currentX != endX || currentY != endY) {
+        while (currentX != targetX || currentY != targetY) {
             // Shouldn't be necessary, but account for floating point inaccuracies?
             if (currentX < 0 || currentY < 0 || currentX >= width || currentY >= height) return; // Outside grid
             int8_t &cell = getCell(currentX, currentY);
