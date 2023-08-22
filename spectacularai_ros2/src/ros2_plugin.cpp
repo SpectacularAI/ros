@@ -295,6 +295,7 @@ public:
             cameraDepthSubscription.subscribe(this, "/input/depth/image");
             depthaiTrackedFeaturesCam0Subscription.subscribe(this, "/input/cam0/features");
 
+            // TODO: cameraImage1Subscription shouldn't be needed, but Synchronizer failed to produce output without it
             stereoDepthCameraSynchronizer = std::make_unique<StereoDepthCameraSynchronizer>(StereoDepthCameraPolicy(CAM_QUEUE_SIZE),
                 cameraInfo0Subscription, cameraInfo1Subscription,
                 cameraImage0Subscription, cameraImage1Subscription,
@@ -506,6 +507,7 @@ private:
         const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo0, const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo1,
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1,
         const sensor_msgs::msg::Image::ConstSharedPtr &depth, const depthai_ros_msgs::msg::TrackedFeatures::ConstSharedPtr &features) {
+        (void)img1;
 
         // RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
 
@@ -525,16 +527,6 @@ private:
         }
 
         if (vioInitDone && !vioApi) return;
-
-        if (img0->width != img1->width || img0->height != img1->height) {
-            RCLCPP_WARN(this->get_logger(), "Stereo image resolutions don't match");
-            return;
-        }
-
-        if (img0->encoding != img1->encoding) {
-            RCLCPP_WARN(this->get_logger(), "Image types must match");
-            return;
-        }
 
         spectacularAI::ColorFormat colorFormat;
         spectacularAI::ColorFormat depthFormat;
@@ -564,7 +556,7 @@ private:
             depth->data.data(),
             depthFormat,
             isSlamKf ? img0->data.data() : nullptr,
-            isSlamKf ? img1->data.data() : nullptr,
+            nullptr,
             isSlamKf ? colorFormat : spectacularAI::ColorFormat::NONE,
             depthScale);
 
