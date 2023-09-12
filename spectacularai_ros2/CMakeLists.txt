@@ -48,5 +48,5 @@ install(
   LIBRARY DESTINATION lib/${PROJECT_NAME}
   INCLUDES DESTINATION include/${PROJECT_NAME}
 )
-
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 ament_package()
