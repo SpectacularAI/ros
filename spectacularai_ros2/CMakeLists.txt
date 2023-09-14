@@ -36,7 +36,11 @@ find_package(depthai_ros_msgs REQUIRED) # Depth AI features
 
 add_executable(vislam ${PLUGIN_SRC})
 
-target_link_libraries(vislam spectacularAI::spectacularAI)
+# Dynamic dependencies of the static library SDK variant
+set(SAI_STATIC_MANUAL_LINK_LIBS z)
+target_link_libraries(vislam spectacularAI::spectacularAI ${SAI_STATIC_MANUAL_LINK_LIBS})
+# Strip the output executable
+set_target_properties(vislam PROPERTIES LINK_FLAGS -s)
 
 # ROS dependencies
 ament_target_dependencies(vislam rclcpp sensor_msgs nav_msgs tf2_geometry_msgs image_transport message_filters tf2 tf2_ros depthai_ros_msgs)
