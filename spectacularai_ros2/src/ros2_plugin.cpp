@@ -112,6 +112,7 @@ Matrix4f matrixToFloat(const spectacularAI::Matrix4d &doubleArray) {
     return floatArray;
 }
 
+/*
 spectacularAI::Matrix4d matrixConvert(const std::array<double, 9> &m) {
     return {{
         {m[0], m[1], m[2], 0.0},
@@ -120,6 +121,7 @@ spectacularAI::Matrix4d matrixConvert(const std::array<double, 9> &m) {
         {0.0, 0.0, 0.0, 1.0}
     }};
 }
+*/
 
 spectacularAI::Matrix4d matrixConvert(geometry_msgs::msg::TransformStamped tf) {
     auto t = tf.transform.translation;
@@ -355,6 +357,20 @@ private:
     }
 
     bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<geometry_msgs::msg::TransformStamped> extrinsics, bool isRectified, std::string &calibrationJson) {
+
+        const spectacularAI::Matrix4d convertCamera = {{
+             { 0, -1, 0, 0 },
+             { 1, 0, 0, 0 },
+             { 0, 0, 1, 0 },
+             { 0, 0, 0, 1 }
+        }};
+        const spectacularAI::Matrix4d convertImu = {{
+             { 0, 1, 0, 0 },
+             { 1, 0, 0, 0 },
+             { 0, 0, -1, 0 },
+             { 0, 0, 0, 1 }
+        }};
+
         // https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg
         std::ostringstream calib;
         calib << std::setprecision(18);
@@ -378,8 +394,9 @@ private:
                 px = intr->p[2];
                 py = intr->p[6];
 
-                spectacularAI::Matrix4d rectificationRotation = matrixConvert(intr->r);
-                imuToCamera = matrixMul(rectificationRotation, imuToCamera);
+                // Seems like this is already applied because the imuToCamera matrix rotation parts are identical.
+                // spectacularAI::Matrix4d rectificationRotation = matrixConvert(intr->r);
+                // imuToCamera = matrixMul(rectificationRotation, imuToCamera);
                 model = "pinhole";
             } else {
                 // Intrinsic camera matrix for the raw (distorted) images.
@@ -391,6 +408,8 @@ private:
                 px = intr->k[2];
                 py = intr->k[5];
             }
+
+            imuToCamera = matrixMul(convertCamera, matrixMul(imuToCamera, convertImu));
 
             if (model == "unknown") return false;
 
@@ -416,6 +435,7 @@ private:
         }
         calib << "]}";
         calibrationJson = calib.str();
+        // RCLCPP_WARN(this->get_logger(), "%s", calibrationJson.c_str());
         return true;
     }
 
