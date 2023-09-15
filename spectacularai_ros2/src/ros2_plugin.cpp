@@ -357,20 +357,6 @@ private:
     }
 
     bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<geometry_msgs::msg::TransformStamped> extrinsics, bool isRectified, std::string &calibrationJson) {
-
-        const spectacularAI::Matrix4d convertCamera = {{
-             { 0, -1, 0, 0 },
-             { 1, 0, 0, 0 },
-             { 0, 0, 1, 0 },
-             { 0, 0, 0, 1 }
-        }};
-        const spectacularAI::Matrix4d convertImu = {{
-             { 0, 1, 0, 0 },
-             { 1, 0, 0, 0 },
-             { 0, 0, -1, 0 },
-             { 0, 0, 0, 1 }
-        }};
-
         // https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg
         std::ostringstream calib;
         calib << std::setprecision(18);
@@ -409,7 +395,23 @@ private:
                 py = intr->k[5];
             }
 
-            imuToCamera = matrixMul(convertCamera, matrixMul(imuToCamera, convertImu));
+            // Not tested on many platforms.
+            constexpr bool applyOakdCoordinateTransform = true;
+            if (applyOakdCoordinateTransform) {
+                const spectacularAI::Matrix4d convertCamera = {{
+                    { 0, -1, 0, 0 },
+                    { 1, 0, 0, 0 },
+                    { 0, 0, 1, 0 },
+                    { 0, 0, 0, 1 }
+                }};
+                const spectacularAI::Matrix4d convertImu = {{
+                    { 0, 1, 0, 0 },
+                    { 1, 0, 0, 0 },
+                    { 0, 0, -1, 0 },
+                    { 0, 0, 0, 1 }
+                }};
+                imuToCamera = matrixMul(convertCamera, matrixMul(imuToCamera, convertImu));
+            }
 
             if (model == "unknown") return false;
 
