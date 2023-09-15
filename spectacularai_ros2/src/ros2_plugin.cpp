@@ -112,15 +112,6 @@ Matrix4f matrixToFloat(const spectacularAI::Matrix4d &doubleArray) {
     return floatArray;
 }
 
-spectacularAI::Matrix4d matrixConvert(const std::array<double, 9> &m) {
-    return {{
-        {m[0], m[1], m[2], 0.0},
-        {m[3], m[4], m[5], 0.0},
-        {m[6], m[7], m[8], 0.0},
-        {0.0, 0.0, 0.0, 1.0}
-    }};
-}
-
 spectacularAI::Matrix4d matrixConvert(geometry_msgs::msg::TransformStamped tf) {
     auto t = tf.transform.translation;
     tf2::Quaternion q;
@@ -378,8 +369,8 @@ private:
                 px = intr->p[2];
                 py = intr->p[6];
 
-                spectacularAI::Matrix4d rectificationRotation = matrixConvert(intr->r);
-                imuToCamera = matrixMul(rectificationRotation, imuToCamera);
+                // Seems like rectification rotation `intr->r` is applied because the imuToCamera
+                // matrix rotation parts are identical in both cameras of stereo.
                 model = "pinhole";
             } else {
                 // Intrinsic camera matrix for the raw (distorted) images.
@@ -390,6 +381,24 @@ private:
                 fy = intr->k[4];
                 px = intr->k[2];
                 py = intr->k[5];
+            }
+
+            // Not tested on many platforms.
+            constexpr bool applyOakdCoordinateTransform = true;
+            if (applyOakdCoordinateTransform) {
+                const spectacularAI::Matrix4d convertCamera = {{
+                    { 0, -1, 0, 0 },
+                    { 1, 0, 0, 0 },
+                    { 0, 0, 1, 0 },
+                    { 0, 0, 0, 1 }
+                }};
+                const spectacularAI::Matrix4d convertImu = {{
+                    { 0, 1, 0, 0 },
+                    { 1, 0, 0, 0 },
+                    { 0, 0, -1, 0 },
+                    { 0, 0, 0, 1 }
+                }};
+                imuToCamera = matrixMul(convertCamera, matrixMul(imuToCamera, convertImu));
             }
 
             if (model == "unknown") return false;
@@ -416,6 +425,7 @@ private:
         }
         calib << "]}";
         calibrationJson = calib.str();
+        // RCLCPP_WARN(this->get_logger(), "%s", calibrationJson.c_str());
         return true;
     }
 
