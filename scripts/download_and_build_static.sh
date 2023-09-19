@@ -1,11 +1,8 @@
-#!/bin/bash
-
-set -eux
+set -eu
 
 : "${ARCHITECTURE:=$(uname -m)}"
 : "${ROS_DISTRO:=humble}"
 : "${DEPTHAI_WS:=/underlay_ws}"
-: "${GITHUB_RAE_PAT_TOKEN:=}"
 
 # Select correct release artifact for this OS architecture
 
