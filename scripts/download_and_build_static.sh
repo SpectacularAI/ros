@@ -1,4 +1,4 @@
-set -eu
+set -e
 
 : "${ARCHITECTURE:=$(uname -m)}"
 : "${ROS_DISTRO:=humble}"
@@ -23,7 +23,7 @@ fi
 
 mkdir -p sai_sdk
 cd sai_sdk
-curl -L -H "Accept: application/octet-stream" -H "Authorization: Bearer ${GITHUB_RAE_PAT_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" -o spectacularai_sdk.zip https://api.github.com/repos/spectacularAI/sai-sdk-for-rae/releases/assets/${SPECTACULARAI_SDK_RELEASE_ID}
+curl -L -H "Accept: application/octet-stream" -H "Authorization: Bearer ${GITHUB_RAE_PAT_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" -o spectacularai_sdk.zip test
 unzip spectacularai_sdk.zip
 cd ..
 
