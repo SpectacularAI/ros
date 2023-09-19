@@ -35,4 +35,4 @@ cd ..
 
 # Remove temp files
 
-rm -rf ../sai_sdk
+rm -rf sai_sdk
