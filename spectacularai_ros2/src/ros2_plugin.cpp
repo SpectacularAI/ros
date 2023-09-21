@@ -37,7 +37,7 @@
 // Spectacular AI
 #include <spectacularAI/vio.hpp>
 
-#include "ros2_plugin.hpp"
+// Helpers
 #include "occupancy_grid.hpp"
 
 namespace {
@@ -237,11 +237,9 @@ struct RosPointWithColor {
 namespace spectacularAI {
 namespace ros2 {
 
-class Ros2WrapperImpl : public Ros2Wrapper {
+class Node : public rclcpp::Node {
 public:
-    Ros2WrapperImpl() : Ros2Wrapper("spectacularAI"),
-            nodeHandle(std::shared_ptr<Ros2WrapperImpl>(this, [](auto *) {})), // create the shared_ptr node handle for this node.
-            imageTransport(nodeHandle), vioInitDone(false) {
+    Node(const rclcpp::NodeOptions& options) : rclcpp::Node("spetacularAI", options), vioInitDone(false) {
 
         imuFrameId = declareAndReadParameterString("imu_frame_id", "");
         worldFrameId = declareAndReadParameterString("world_frame_id", "");
@@ -260,7 +258,7 @@ public:
         imuSubscription = this->create_subscription<sensor_msgs::msg::Imu>(
             "input/imu",
             IMU_QUEUE_SIZE,
-            std::bind(&Ros2WrapperImpl::imuCallback, this, std::placeholders::_1));
+            std::bind(&Node::imuCallback, this, std::placeholders::_1));
 
         odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
@@ -276,7 +274,7 @@ public:
                 cameraInfo0Subscription, cameraInfo1Subscription,
                 cameraImage0Subscription, cameraImage1Subscription);
             stereoCameraSynchronizer->setMaxIntervalDuration(CAMERA_SYNC_INTERVAL);
-            stereoCameraSynchronizer->registerCallback(std::bind(&Ros2WrapperImpl::stereoCameraCallback, this,
+            stereoCameraSynchronizer->registerCallback(std::bind(&Node::stereoCameraCallback, this,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
         } else if (cameraInputType == "stereo_depth_features") {
             cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info");
@@ -292,7 +290,7 @@ public:
                 cameraImage0Subscription, cameraImage1Subscription,
                 cameraDepthSubscription, depthaiTrackedFeaturesCam0Subscription);
             stereoDepthCameraSynchronizer->setMaxIntervalDuration(CAMERA_SYNC_INTERVAL);
-            stereoDepthCameraSynchronizer->registerCallback(std::bind(&Ros2WrapperImpl::stereoDepthCameraCallback, this,
+            stereoDepthCameraSynchronizer->registerCallback(std::bind(&Node::stereoDepthCameraCallback, this,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
         } else {
             RCLCPP_WARN(this->get_logger(), "Unsupported camera_input_type: %s", cameraInputType.c_str());
@@ -700,14 +698,11 @@ private:
         vioBuilder.setCalibrationJSON(calibrationJson);
         vioBuilder.setConfigurationYAML(config);
         if (!recordingFolder.empty()) vioBuilder.setRecordingFolder(recordingFolder);
-        if (enableMapping) vioBuilder.setMapperCallback(std::bind(&Ros2WrapperImpl::mappingOutputCallback, this, std::placeholders::_1));
+        if (enableMapping) vioBuilder.setMapperCallback(std::bind(&Node::mappingOutputCallback, this, std::placeholders::_1));
         vioApi = vioBuilder.build();
-        vioApi->setOutputCallback(std::bind(&Ros2WrapperImpl::vioOutputCallback, this, std::placeholders::_1));
+        vioApi->setOutputCallback(std::bind(&Node::vioOutputCallback, this, std::placeholders::_1));
         vioInitDone = true;
     }
-
-    rclcpp::Node::SharedPtr nodeHandle;
-    image_transport::ImageTransport imageTransport;
 
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointCloudPublisher;
@@ -759,11 +754,8 @@ private:
     int occupiedThreshold = 2;
 };
 
-std::unique_ptr<Ros2Wrapper> Ros2Wrapper::build() {
-    return std::make_unique<Ros2WrapperImpl>();
-}
-
-Ros2Wrapper::~Ros2Wrapper() = default;
-
 } // namespace ros2
 } // namespace spectacularai
+
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(spectacularAI::ros2::Node)

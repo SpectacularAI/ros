@@ -20,12 +20,13 @@ cd "$ROOT"
 
 INSTALL_DIR="spectacularai_ros2/install/spectacularai_ros2/"
 # Strip the executable (just in case the CMake build failed to do that)
-strip "$INSTALL_DIR/lib/spectacularai_ros2/vislam"
+strip "$INSTALL_DIR/lib/libvislam.so"
 
 # Copy license/notice file form the SDK package
 LICENSE_OUTPUT_DIR="$INSTALL_DIR"
 mkdir -p "$LICENSE_OUTPUT_DIR"
 cp $TMP/install/share/doc/spectacularAI/LICENSE "$LICENSE_OUTPUT_DIR/LICENSE.txt"
 
-# Delete the temporary static library installation
+# Delete the temporary static library installation and build dir
 rm -rf "$TMP"
+rm -rf "spectacularai_ros2/build"
