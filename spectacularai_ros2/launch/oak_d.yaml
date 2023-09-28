@@ -7,6 +7,8 @@
       i_pipeline_type: depth
       i_usb_speed: SUPER_PLUS
       i_nn_type: none
+      i_publish_tf_from_calibration: True
+      i_tf_imu_from_descr: 'true'
     left:
       i_fps: 90.0
       i_resolution: '400'
