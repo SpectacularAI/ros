@@ -46,4 +46,6 @@ install(
   INCLUDES DESTINATION include/
 )
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(IMPORTED_RUNTIME_ARTIFACTS spectacularAI::spectacularAI)
+
 ament_package()

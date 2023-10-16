@@ -8,7 +8,7 @@
 
 * ROS2 Humble framework: https://docs.ros.org/en/dashing/Installation/Ubuntu-Install-Binary.html
 * DepthAI ROS: https://github.com/luxonis/depthai-ros
-* Spectacular AI SDK: https://www.spectacularai.com/#contact
+* Spectacular AI SDK (requires commercial version): https://www.spectacularai.com/#contact
 
 ## Build & Run
 
