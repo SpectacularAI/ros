@@ -14,9 +14,6 @@ def launch_setup(context, *args, **kwargs):
 
     params_file = LaunchConfiguration("params_file")
     name = LaunchConfiguration('name').perform(context)
-    parent_frame = LaunchConfiguration('parent_frame',  default = 'oak-d-base-frame')
-    urdf_launch_dir = os.path.join(get_package_share_directory('depthai_descriptions'), 'launch')
-    depthai_prefix = get_package_share_directory("depthai_ros_driver")
     return [
             Node(
                 condition=IfCondition(LaunchConfiguration("use_rviz").perform(context)),
@@ -28,12 +25,9 @@ def launch_setup(context, *args, **kwargs):
             ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                os.path.join(urdf_launch_dir, 'urdf_launch.py')),
-            launch_arguments={'tf_prefix': name,
-                              'base_frame': name,
-                              'parent_frame': parent_frame,
-                              'use_composition': 'true',
-                              'use_base_descr': 'true'}.items()),
+                os.path.join(get_package_share_directory('rae_description'), 'launch', 'rsp.launch.py')),
+            launch_arguments={'sim': 'false'}.items()
+        ),
 
         ComposableNodeContainer(
             name=name+"_container",
@@ -48,11 +42,17 @@ def launch_setup(context, *args, **kwargs):
                     parameters=[params_file],
                 ),
                 ComposableNode(
+                        package="depthai_filters",
+                        name="feature_overlay_rgb",
+                        plugin="depthai_filters::FeatureTrackerOverlay",
+                        remappings=[('rgb/preview/image_raw', name + '/right/image_rect'),
+                                    ('feature_tracker/tracked_features', name + '/right_rect_feature_tracker/tracked_features')]
+                    ),
+                ComposableNode(
                     package='spectacularai_ros2',
                     plugin='spectacularAI::ros2::Node',
                     parameters=[
-                        # Used for extrinsics calibration
-                        {"imu_frame_id": name+"_imu_frame"},
+                        # Camera extrinsics
                         {"cam0_frame_id": name + "_right_camera_optical_frame"},
                         {"cam1_frame_id": name + "_left_camera_optical_frame"},
                         {"depth_scale": 1.0/1000.0}, # Depth map values are multiplied with this to get distance in meters
@@ -60,6 +60,7 @@ def launch_setup(context, *args, **kwargs):
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
                         {"enable_mapping": True},
                         {"enable_occupancy_grid": True},
+                        {"device_model": "rae"} # Used to fetch imu to camera transformation
                     ],
                     remappings=[
                         ('input/imu', name + '/imu/data'),
@@ -81,12 +82,12 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     spectacular_prefix = get_package_share_directory("spectacularai_ros2")
     declared_arguments = [
-        DeclareLaunchArgument("name", default_value="oak"),
+        DeclareLaunchArgument("name", default_value="rae"),
         DeclareLaunchArgument("use_rviz", default_value='false'),
         DeclareLaunchArgument("recording_folder", default_value=""),
-        DeclareLaunchArgument("parent_frame", default_value="oak-d-base-frame"),
-        DeclareLaunchArgument("params_file", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.yaml')),
-        DeclareLaunchArgument("rviz_config", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.rviz')),
+        DeclareLaunchArgument("parent_frame", default_value="base_footprint"),
+        DeclareLaunchArgument("params_file", default_value=os.path.join(spectacular_prefix, 'launch', 'rae.yaml')),
+        DeclareLaunchArgument("rviz_config", default_value=os.path.join(spectacular_prefix, 'launch', 'mapping.rviz')),
     ]
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]
