@@ -56,6 +56,7 @@ R"(imuAnomalyFilterGyroEnabled: True
 imuStationaryEnabled: True
 visualR: 0.01
 skipFirstNFrames: 10
+ffmpegVideoCodec: "libx264 -crf 15 -preset ultrafast"
 )";
 
 const char *baseYaml =
