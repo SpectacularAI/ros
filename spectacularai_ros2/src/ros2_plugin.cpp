@@ -587,7 +587,7 @@ private:
             depth->data.data(),
             depthFormat,
             isSlamKf ? img0->data.data() : nullptr,
-            nullptr,
+            isSlamKf ? img1->data.data() : nullptr,
             isSlamKf ? colorFormat : spectacularAI::ColorFormat::NONE,
             depthScale);
 
