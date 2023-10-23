@@ -38,6 +38,7 @@
 #include <spectacularAI/vio.hpp>
 
 // Helpers
+#include "device_imu_calib.hpp"
 #include "occupancy_grid.hpp"
 
 namespace {
@@ -241,10 +242,17 @@ class Node : public rclcpp::Node {
 public:
     Node(const rclcpp::NodeOptions& options) : rclcpp::Node("spetacularAI", options), vioInitDone(false) {
 
+        deviceModel = declareAndReadParameterString("device_model", "");
+
+        // Used for IMU-Camera extrinsics calibration
         imuFrameId = declareAndReadParameterString("imu_frame_id", "");
-        worldFrameId = declareAndReadParameterString("world_frame_id", "");
-        cam0FrameId = declareAndReadParameterString("cam0_frame_id", "");
-        cam1FrameId = declareAndReadParameterString("cam1_frame_id", "");
+        cam0FrameId = declareAndReadParameterString("cam0_optical_frame_id", "");
+        cam1FrameId = declareAndReadParameterString("cam1_optical_frame_id", "");
+
+        // Output frames
+        vioOutputParentFrameId = declareAndReadParameterString("vio_output_parent_frame_id", "map");
+        vioOutputChildFrameId = declareAndReadParameterString("vio_output_parent_child_frame_id", "base_link");
+
         depthScale = declareAndReadParameterDouble("depth_scale", 1.0 / 1000.0);
         recordingFolder = declareAndReadParameterString("recording_folder", "");
         enableMapping = declareAndReadParameterBool("enable_mapping", true);
@@ -306,7 +314,6 @@ private:
 
         oss << "alreadyRectified: True\n";
 
-
         bool useFeatureTracker = cameraInputType == "stereo_depth_features";
 
         if (useFeatureTracker) {
@@ -343,7 +350,7 @@ private:
         return "unknown";
     }
 
-    bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<geometry_msgs::msg::TransformStamped> extrinsics, bool isRectified, std::string &calibrationJson) {
+    bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<spectacularAI::Matrix4d> extrinsics, bool isRectified, std::string &calibrationJson) {
         // https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg
         std::ostringstream calib;
         calib << std::setprecision(18);
@@ -351,10 +358,8 @@ private:
         calib << "\"cameras\": [";
         for (size_t i = 0; i < intrinsics.size(); i++) {
             auto& intr = intrinsics[i];
-            auto& extr = extrinsics[i];
 
             std::string model = rosToSaiDistortionModel(intr->distortion_model);
-            spectacularAI::Matrix4d imuToCamera = matrixConvert(extr);
             double fx, fy, px, py;
 
             if (isRectified) {
@@ -381,24 +386,6 @@ private:
                 py = intr->k[5];
             }
 
-            // Not tested on many platforms.
-            constexpr bool applyOakdCoordinateTransform = true;
-            if (applyOakdCoordinateTransform) {
-                const spectacularAI::Matrix4d convertCamera = {{
-                    { 0, -1, 0, 0 },
-                    { 1, 0, 0, 0 },
-                    { 0, 0, 1, 0 },
-                    { 0, 0, 0, 1 }
-                }};
-                const spectacularAI::Matrix4d convertImu = {{
-                    { 0, 1, 0, 0 },
-                    { 1, 0, 0, 0 },
-                    { 0, 0, -1, 0 },
-                    { 0, 0, 0, 1 }
-                }};
-                imuToCamera = matrixMul(convertCamera, matrixMul(imuToCamera, convertImu));
-            }
-
             if (model == "unknown") return false;
 
             calib << "{";
@@ -408,7 +395,7 @@ private:
             calib << "\"principalPointY\":" << py << ",";
             calib << "\"imageHeight\":" << intr->height << ",";
             calib << "\"imageWidth\":" << intr->width << ",";
-            calib << "\"imuToCamera\": " << toJson(imuToCamera) << ",";
+            calib << "\"imuToCamera\": " << toJson(extrinsics[i]) << ",";
             if (model != "pinhole") {
                 calib << "\"distortionCoefficients\": [";
                 for (size_t j = 0; j < intr->d.size(); j++) {
@@ -468,20 +455,48 @@ private:
         vioApi->addAcc(time, {msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z});
     }
 
+    bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1) {
+        if (imuFrameId.empty() && !deviceModel.empty()) {
+            spectacularAI::Matrix4d imuToCamera;
+            if (!getDeviceImuToCameraMatrix(deviceModel, imuToCamera)) {
+                RCLCPP_WARN(this->get_logger(), "No stored camera calibration for %s", deviceModel.c_str());
+                return false;
+            }
+
+            spectacularAI::Matrix4d cam0ToCam1;
+            try {
+                cam0ToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, cam1FrameId, tf2::TimePointZero));
+            } catch (const tf2::TransformException & ex) {
+                RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
+                return false;
+            }
+            imuToCam0 = imuToCamera;
+            imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
+
+        } else if (!imuFrameId.empty()) {
+            try {
+                imuToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam0FrameId, tf2::TimePointZero));
+                imuToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam1FrameId, tf2::TimePointZero));
+            } catch (const tf2::TransformException & ex) {
+                RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
+                return false;
+            }
+        } else {
+            RCLCPP_WARN(this->get_logger(),
+                "Failed to obtain camera extrinsics, cannot start tracking. You must provide a known device_model or imu frame ID");
+            return false;
+        }
+
+        return true;
+    }
+
     void stereoCameraCallback(
         const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo0, const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo1,
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1) {
 
         if (!vioInitDone) {
-            geometry_msgs::msg::TransformStamped imuToCam0, imuToCam1;
-            try {
-                imuToCam0 = transformListenerBuffer->lookupTransform(imuFrameId, cam0FrameId, tf2::TimePointZero);
-                imuToCam1 = transformListenerBuffer->lookupTransform(imuFrameId, cam1FrameId, tf2::TimePointZero);
-            } catch (const tf2::TransformException & ex) {
-                RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
-                return;
-            }
-
+            spectacularAI::Matrix4d imuToCam0, imuToCam1;
+            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1)) return;
             // TODO: Support non rectified images, by ROS convention "image" topic is unrectified, "image_rect" is rectified
             constexpr bool IS_RECTIFIED = true;
             startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, IS_RECTIFIED);
@@ -520,15 +535,8 @@ private:
         // RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
 
         if (!vioInitDone) {
-            geometry_msgs::msg::TransformStamped imuToCam0, imuToCam1;
-            try {
-                imuToCam0 = transformListenerBuffer->lookupTransform(imuFrameId, cam0FrameId, tf2::TimePointZero);
-                imuToCam1 = transformListenerBuffer->lookupTransform(imuFrameId, cam1FrameId, tf2::TimePointZero);
-            } catch (const tf2::TransformException & ex) {
-                RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
-                return;
-            }
-
+            spectacularAI::Matrix4d imuToCam0, imuToCam1;
+            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1)) return;
             // TODO: Support non rectified images, by ROS convention "image" topic is unrectified, "image_rect" is rectified
             constexpr bool IS_RECTIFIED = true;
             startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, IS_RECTIFIED);
@@ -573,8 +581,8 @@ private:
 
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
-            transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, worldFrameId, imuFrameId));
-            odometryPublisher->publish(outputToOdometryMsg(vioOutput, worldFrameId, imuFrameId));
+            transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, vioOutputParentFrameId, vioOutputChildFrameId));
+            odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
         }
     }
@@ -588,7 +596,7 @@ private:
 
         sensor_msgs::msg::PointCloud2 pc;
         pc.header.stamp = secondsToStamp(primary->cameraPose.pose.time);
-        pc.header.frame_id = worldFrameId;
+        pc.header.frame_id = vioOutputParentFrameId;
 
         std::string fieldNames[] = {"x", "y", "z", "rgb"};
         uint32_t totalOffset = 0;
@@ -679,7 +687,7 @@ private:
         }
     }
 
-    void startVio(std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, std::vector<geometry_msgs::msg::TransformStamped> extrinsics, bool isRectified) {
+    void startVio(std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, std::vector<spectacularAI::Matrix4d> extrinsics, bool isRectified) {
         std::lock_guard<std::mutex> lock(vioStartup);
         if (vioInitDone) return;
 
@@ -729,8 +737,11 @@ private:
     std::mutex vioStartup;
 
     // Params
+    std::string vioOutputParentFrameId;
+    std::string vioOutputChildFrameId;
+
+    std::string deviceModel;
     std::string imuFrameId;
-    std::string worldFrameId;
     std::string cam0FrameId;
     std::string cam1FrameId;
     double depthScale;
