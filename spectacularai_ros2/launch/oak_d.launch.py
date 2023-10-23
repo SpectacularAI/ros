@@ -53,8 +53,8 @@ def launch_setup(context, *args, **kwargs):
                     parameters=[
                         # Used for extrinsics calibration
                         {"imu_frame_id": name+"_imu_frame"},
-                        {"cam0_frame_id": name+"_left_camera_optical_frame"},
-                        {"cam1_frame_id": name+"_right_camera_optical_frame"},
+                        {"cam0_frame_id": name + "_right_camera_optical_frame"},
+                        {"cam1_frame_id": name + "_left_camera_optical_frame"},
                         {"depth_scale": 1.0/1000.0}, # Depth map values are multiplied with this to get distance in meters
                         {"camera_input_type": "stereo_depth_features"},
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
