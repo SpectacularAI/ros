@@ -44,9 +44,9 @@
 namespace {
 static double NANOS_TO_SECONDS = 1e-9;
 static double SECONDS_TO_NANOS = 1e9;
-static size_t IMU_QUEUE_SIZE = 100;
-static size_t ODOM_QUEUE_SIZE = 100;
-static uint32_t CAM_QUEUE_SIZE = 10;
+static size_t IMU_QUEUE_SIZE = 1000;
+static size_t ODOM_QUEUE_SIZE = 1000;
+static uint32_t CAM_QUEUE_SIZE = 30;
 
 //  message_filters::Synchronize duration for synchronizing different camera inputs
 static rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
