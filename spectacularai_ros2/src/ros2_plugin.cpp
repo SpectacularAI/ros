@@ -451,6 +451,11 @@ private:
         // RCLCPP_INFO(this->get_logger(), "Received: %s", msgToString(msg).c_str());
         if (!vioInitDone || !vioApi) return;
         double time = stampToSeconds(msg.header.stamp);
+        if (time < previousImuTime) {
+            RCLCPP_WARN(this->get_logger(), "Received IMU sample (%f) that's older than previous (%f), skipping it.", time, previousImuTime);
+            return;
+        }
+        previousImuTime = time;
         vioApi->addGyro(time, {msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z});
         vioApi->addAcc(time, {msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z});
     }
@@ -518,6 +523,11 @@ private:
         // RCLCPP_INFO(this->get_logger(), "Timestamp: %d, %d", img0->header.stamp.sec, img0->header.stamp.nanosec);
 
         double time = stampToSeconds(img0->header.stamp);
+        if (time < previousFrameTime) {
+            RCLCPP_WARN(this->get_logger(), "Received frame (%f) that's older than previous (%f), skipping it.", time, previousFrameTime);
+            return;
+        }
+        previousFrameTime = time;
         vioApi->addFrameStereo(
             time,
             img0->width, img0->height,
@@ -562,6 +572,11 @@ private:
         }
 
         double time = stampToSeconds(img0->header.stamp);
+        if (time < previousFrameTime) {
+            RCLCPP_WARN(this->get_logger(), "Received frame (%f) that's older than previous (%f), skipping it.", time, previousFrameTime);
+            return;
+        }
+        previousFrameTime = time;
 
         bool isSlamKf = frameNumber % 6 == 0; // TODO: Make configurable
         vioApi->addFrameStereoDepth(
@@ -735,6 +750,9 @@ private:
     std::unique_ptr<spectacularAI::Vio> vioApi;
     std::atomic_bool vioInitDone;
     std::mutex vioStartup;
+
+    double previousFrameTime = 0.0;
+    double previousImuTime = 0.0;
 
     // Params
     std::string vioOutputParentFrameId;
