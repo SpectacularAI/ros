@@ -447,7 +447,7 @@ private:
         return this->get_parameter(name).as_bool();
     }
 
-    void imuCallback(const sensor_msgs::msg::Imu &msg) const {
+    void imuCallback(const sensor_msgs::msg::Imu &msg) {
         // RCLCPP_INFO(this->get_logger(), "Received: %s", msgToString(msg).c_str());
         if (!vioInitDone || !vioApi) return;
         double time = stampToSeconds(msg.header.stamp);
