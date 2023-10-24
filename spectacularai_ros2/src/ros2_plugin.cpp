@@ -42,37 +42,22 @@
 #include "occupancy_grid.hpp"
 
 namespace {
-static double NANOS_TO_SECONDS = 1e-9;
-static double SECONDS_TO_NANOS = 1e9;
-static size_t IMU_QUEUE_SIZE = 1000;
-static size_t ODOM_QUEUE_SIZE = 1000;
-static uint32_t CAM_QUEUE_SIZE = 30;
+static const double NANOS_TO_SECONDS = 1e-9;
+static const double SECONDS_TO_NANOS = 1e9;
+static const size_t IMU_QUEUE_SIZE = 1000;
+static const size_t ODOM_QUEUE_SIZE = 1000;
+static const uint32_t CAM_QUEUE_SIZE = 30;
 
-//  message_filters::Synchronize duration for synchronizing different camera inputs
-static rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
+// Group window for camera frames, should always be smaller than time between two frames
+static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
+
+// https://docs.ros.org/en/humble/Concepts/Intermediate/About-Quality-of-Service-Settings.html
+static const rclcpp::QoS CAMERA_QOS = rclcpp::QoS(rclcpp::KeepLast(CAM_QUEUE_SIZE)).best_effort().durability_volatile();
 
 const char *oakYaml =
-R"(imuAnomalyFilterGyroEnabled: True
-imuStationaryEnabled: True
-visualR: 0.01
-skipFirstNFrames: 10
+R"(parameterSets: [wrapper-base, oak-d, live]
+useSlam: True
 ffmpegVideoCodec: "libx264 -crf 15 -preset ultrafast"
-)";
-
-const char *baseYaml =
-R"(trackChiTestOutlierR: 3
-trackOutlierThresholdGrowthFactor: 1.3
-hybridMapSize: 2
-sampleSyncLag: 1
-outputCameraPose: False
-trackingStatusInitMinSeconds: 0.5
-)";
-
-const char *slamYaml =
-R"(useSlam: True
-delayFrames: 2
-noWaitingForResults: True
-maxSlamResultQueueSize: 2
 )";
 
 constexpr size_t DIM = 4;
@@ -274,10 +259,10 @@ public:
         if (enableMapping) pointCloudPublisher = this->create_publisher<sensor_msgs::msg::PointCloud2>("output/pointcloud", ODOM_QUEUE_SIZE);
 
         if (cameraInputType == "stereo") {
-            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info");
-            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info");
-            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect");
-            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect");
+            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect", CAMERA_QOS.get_rmw_qos_profile());
 
             stereoCameraSynchronizer = std::make_unique<StereoCameraSynchronizer>(StereoCameraPolicy(CAM_QUEUE_SIZE),
                 cameraInfo0Subscription, cameraInfo1Subscription,
@@ -286,14 +271,13 @@ public:
             stereoCameraSynchronizer->registerCallback(std::bind(&Node::stereoCameraCallback, this,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
         } else if (cameraInputType == "stereo_depth_features") {
-            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info");
-            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info");
-            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect");
-            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect");
-            cameraDepthSubscription.subscribe(this, "/input/depth/image");
-            depthaiTrackedFeaturesCam0Subscription.subscribe(this, "/input/cam0/features");
+            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect", CAMERA_QOS.get_rmw_qos_profile());
+            cameraDepthSubscription.subscribe(this, "/input/depth/image", CAMERA_QOS.get_rmw_qos_profile());
+            depthaiTrackedFeaturesCam0Subscription.subscribe(this, "/input/cam0/features", CAMERA_QOS.get_rmw_qos_profile());
 
-            // TODO: cameraImage1Subscription shouldn't be needed, but Synchronizer failed to produce output without it
             stereoDepthCameraSynchronizer = std::make_unique<StereoDepthCameraSynchronizer>(StereoDepthCameraPolicy(CAM_QUEUE_SIZE),
                 cameraInfo0Subscription, cameraInfo1Subscription,
                 cameraImage0Subscription, cameraImage1Subscription,
@@ -309,10 +293,7 @@ public:
 private:
     std::string createConfigYaml() {
         std::ostringstream oss;
-        oss << baseYaml;
-        oss << slamYaml;
         oss << oakYaml;
-
         oss << "alreadyRectified: True\n";
 
         bool useFeatureTracker = cameraInputType == "stereo_depth_features";
@@ -462,7 +443,7 @@ private:
     }
 
     bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1) {
-        if (imuFrameId.empty() && !deviceModel.empty()) {
+        if (imuFrameId.empty() && !deviceModel.empty() && !cam0FrameId.empty() && !cam1FrameId.empty()) {
             spectacularAI::Matrix4d imuToCamera;
             if (!getDeviceImuToCameraMatrix(deviceModel, imuToCamera)) {
                 RCLCPP_WARN(this->get_logger(), "No stored camera calibration for %s", deviceModel.c_str());
@@ -478,8 +459,11 @@ private:
             }
             imuToCam0 = imuToCamera;
             imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
+            RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam0FrameId.c_str(), cam1FrameId.c_str(), toJson(cam0ToCam1).c_str());
+            RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
+            RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
 
-        } else if (!imuFrameId.empty()) {
+        } else if (!imuFrameId.empty() && !cam0FrameId.empty() && !cam1FrameId.empty()) {
             try {
                 imuToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam0FrameId, tf2::TimePointZero));
                 imuToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam1FrameId, tf2::TimePointZero));
@@ -541,9 +525,8 @@ private:
         const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo0, const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo1,
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1,
         const sensor_msgs::msg::Image::ConstSharedPtr &depth, const depthai_ros_msgs::msg::TrackedFeatures::ConstSharedPtr &features) {
-        (void)img1;
 
-        // RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
+        //RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
 
         if (!vioInitDone) {
             spectacularAI::Matrix4d imuToCam0, imuToCam1;
