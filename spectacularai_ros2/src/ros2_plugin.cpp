@@ -38,15 +38,15 @@
 #include <spectacularAI/vio.hpp>
 
 // Helpers
+#include "helpers.hpp"
+#include "pose_helper.hpp"
 #include "device_imu_calib.hpp"
 #include "occupancy_grid.hpp"
 
 namespace {
-static const double NANOS_TO_SECONDS = 1e-9;
-static const double SECONDS_TO_NANOS = 1e9;
-static const size_t IMU_QUEUE_SIZE = 1000;
-static const size_t ODOM_QUEUE_SIZE = 1000;
-static const uint32_t CAM_QUEUE_SIZE = 30;
+constexpr size_t IMU_QUEUE_SIZE = 1000;
+constexpr size_t ODOM_QUEUE_SIZE = 1000;
+constexpr uint32_t CAM_QUEUE_SIZE = 30;
 
 // Group window for camera frames, should always be smaller than time between two frames
 static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
@@ -60,143 +60,6 @@ useSlam: True
 ffmpegVideoCodec: "libx264 -crf 15 -preset ultrafast"
 )";
 
-constexpr size_t DIM = 4;
-
-template <class M> M matMulGeneric(const M &a, const M &b) {
-    M r;
-    for (size_t i = 0; i < DIM; ++i) {
-        for (size_t j = 0; j < DIM; ++j) {
-            r.at(i).at(j) = 0;
-            for (size_t k = 0; k < DIM; ++k) {
-                r.at(i).at(j) += a.at(i).at(k) * b.at(k).at(j);
-            }
-        }
-    }
-    return r;
-}
-
-spectacularAI::Matrix4d matrixMul(const spectacularAI::Matrix4d &a, const spectacularAI::Matrix4d &b) {
-    return matMulGeneric(a, b);
-}
-
-using Matrix4f = std::array<std::array<float, 4>, 4>;
-
-spectacularAI::Vector3f matVectorMult(const Matrix4f &m, const spectacularAI::Vector3f &v) {
-    return {
-        m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z + m[0][3],
-        m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z + m[1][3],
-        m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z + m[2][3]
-    };
-}
-
-Matrix4f matrixToFloat(const spectacularAI::Matrix4d &doubleArray) {
-    std::array<std::array<float, 4>, 4> floatArray;
-    for (size_t i = 0; i < 4; ++i) {
-        for (size_t j = 0; j < 4; ++j) {
-            floatArray[i][j] = static_cast<float>(doubleArray[i][j]);
-        }
-    }
-    return floatArray;
-}
-
-spectacularAI::Matrix4d matrixConvert(geometry_msgs::msg::TransformStamped tf) {
-    auto t = tf.transform.translation;
-    tf2::Quaternion q;
-    tf2::fromMsg(tf.transform.rotation, q);
-    auto r = tf2::Matrix3x3(q);
-    return {{
-        {r[0][0], r[0][1], r[0][2], t.x},
-        {r[1][0], r[1][1], r[1][2], t.y},
-        {r[2][0], r[2][1], r[2][2], t.z},
-        {0.0, 0.0, 0.0, 1.0}
-    }};
-}
-
-double stampToSeconds(std_msgs::msg::Header::Header_::_stamp_type stamp) {
-    return (int64_t)stamp.sec + (int64_t)stamp.nanosec * NANOS_TO_SECONDS;
-}
-
-std_msgs::msg::Header::Header_::_stamp_type secondsToStamp(double seconds) {
-    std_msgs::msg::Header::Header_::_stamp_type stamp;
-    stamp.sec = std::floor(seconds);
-    stamp.nanosec = (seconds - stamp.sec) * SECONDS_TO_NANOS;
-    return stamp;
-}
-
-std::string toJson(spectacularAI::Matrix4d m) {
-    std::ostringstream ss;
-    ss << std::setprecision(18);
-    ss << "[";
-    ss << "[" << m[0][0] << "," << m[0][1] << "," << m[0][2] << "," << m[0][3] << "],";
-    ss << "[" << m[1][0] << "," << m[1][1] << "," << m[1][2] << "," << m[1][3] << "],";
-    ss << "[" << m[2][0] << "," << m[2][1] << "," << m[2][2] << "," << m[2][3] << "],";
-    ss << "[" << m[3][0] << "," << m[3][1] << "," << m[3][2] << "," << m[3][3] << "]";
-    ss << "]";
-    return ss.str();
-}
-
-geometry_msgs::msg::TransformStamped poseToTransformStampped(spectacularAI::Pose pose, std::string frameId, std::string childFrameId) {
-    geometry_msgs::msg::TransformStamped tf;
-    tf.header.stamp = secondsToStamp(pose.time);
-    tf.header.frame_id = frameId;
-    tf.child_frame_id = childFrameId;
-    tf.transform.translation.x = pose.position.x;
-    tf.transform.translation.y = pose.position.y;
-    tf.transform.translation.z = pose.position.z;
-    tf.transform.rotation.x = pose.orientation.x;
-    tf.transform.rotation.y = pose.orientation.y;
-    tf.transform.rotation.z = pose.orientation.z;
-    tf.transform.rotation.w = pose.orientation.w;
-    return tf;
-}
-
-nav_msgs::msg::Odometry outputToOdometryMsg(spectacularAI::VioOutputPtr output, std::string frameId, std::string childFrameId) {
-    auto& pose = output->pose;
-
-    nav_msgs::msg::Odometry odom;
-    odom.header.stamp = secondsToStamp(pose.time);
-    odom.header.frame_id = frameId;
-    odom.child_frame_id = childFrameId;
-
-    odom.pose.pose.position.x = pose.position.x;
-    odom.pose.pose.position.y = pose.position.y;
-    odom.pose.pose.position.z = pose.position.z;
-    odom.pose.pose.orientation.x = pose.orientation.x;
-    odom.pose.pose.orientation.y = pose.orientation.y;
-    odom.pose.pose.orientation.z = pose.orientation.z;
-    odom.pose.pose.orientation.w = pose.orientation.w;
-
-    // Row-major representation of the 6x6 covariance matrix
-    auto& pc = output->positionCovariance;
-    odom.pose.covariance = {
-        pc[0][0], pc[0][1], pc[0][2], 0, 0, 0,
-        pc[1][0], pc[1][1], pc[1][2], 0, 0, 0,
-        pc[2][0], pc[2][1], pc[2][2], 0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0
-    };
-
-    odom.twist.twist.linear.x = output->velocity.x;
-    odom.twist.twist.linear.y = output->velocity.y;
-    odom.twist.twist.linear.z = output->velocity.z;
-    odom.twist.twist.angular.x = output->angularVelocity.x;
-    odom.twist.twist.angular.y = output->angularVelocity.y;
-    odom.twist.twist.angular.z = output->angularVelocity.z;
-
-    // Row-major representation of the 6x6 covariance matrix
-    auto& vc = output->velocityCovariance;
-    odom.twist.covariance = {
-        vc[0][0], vc[0][1], vc[0][2], 0, 0, 0,
-        vc[1][0], vc[1][1], vc[1][2], 0, 0, 0,
-        vc[2][0], vc[2][1], vc[2][2], 0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0
-    };
-
-    return odom;
-}
 
 using StereoCameraPolicy = message_filters::sync_policies::ApproximateTime<
         sensor_msgs::msg::CameraInfo, sensor_msgs::msg::CameraInfo,
@@ -236,14 +99,17 @@ public:
         cam1FrameId = declareAndReadParameterString("cam1_optical_frame_id", "");
 
         // Output frames
-        vioOutputParentFrameId = declareAndReadParameterString("vio_output_parent_frame_id", "map");
-        vioOutputChildFrameId = declareAndReadParameterString("vio_output_parent_child_frame_id", "base_link");
+        fixedFrameId = declareAndReadParameterString("fixed_frame_id", "map");
+        odometryFrameId = declareAndReadParameterString("odometry_frame_id", "odom");
+        baseLinkFrameId = declareAndReadParameterString("base_link_frame_id", "base_link");
 
         depthScale = declareAndReadParameterDouble("depth_scale", 1.0 / 1000.0);
         recordingFolder = declareAndReadParameterString("recording_folder", "");
         enableMapping = declareAndReadParameterBool("enable_mapping", true);
         enableOccupancyGrid = declareAndReadParameterBool("enable_occupancy_grid", false);
         cameraInputType = declareAndReadParameterString("camera_input_type", "stereo_depth_features");
+
+        outputOnImuSamples = declareAndReadParameterBool("output_on_imu_samples", true);
 
         transformListenerBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         transformListener = std::make_shared<tf2_ros::TransformListener>(*transformListenerBuffer);
@@ -253,6 +119,8 @@ public:
             "input/imu",
             IMU_QUEUE_SIZE,
             std::bind(&Node::imuCallback, this, std::placeholders::_1));
+
+        poseHelper = std::make_unique<PoseHelper>(fixedFrameId, odometryFrameId, baseLinkFrameId);
 
         odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
@@ -311,6 +179,10 @@ private:
             oss << "computeDenseStereoDepthKeyFramesOnly: True\n";
             oss << "stereoPointCloudStride: 5\n";
             oss << "stereoPointCloudMinDepth: " << minDepth << "\n";
+        }
+
+        if (outputOnImuSamples) {
+            oss << "outputOnFrames: False\n";
         }
 
         return oss.str();
@@ -440,6 +312,7 @@ private:
         previousImuTime = time;
         vioApi->addGyro(time, {msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z});
         vioApi->addAcc(time, {msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z});
+        if (outputOnImuSamples) vioApi->addTrigger(time, triggerCounter++);
     }
 
     bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1) {
@@ -459,9 +332,9 @@ private:
             }
             imuToCam0 = imuToCamera;
             imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
-            RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam0FrameId.c_str(), cam1FrameId.c_str(), toJson(cam0ToCam1).c_str());
-            RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
-            RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
+            // RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam0FrameId.c_str(), cam1FrameId.c_str(), toJson(cam0ToCam1).c_str());
+            // RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
+            // RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
 
         } else if (!imuFrameId.empty() && !cam0FrameId.empty() && !cam1FrameId.empty()) {
             try {
@@ -580,8 +453,13 @@ private:
 
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
-            transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, vioOutputParentFrameId, vioOutputChildFrameId));
-            odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
+            geometry_msgs::msg::TransformStamped odomPose;
+            geometry_msgs::msg::TransformStamped odomCorrection;
+            if (poseHelper->computeContinousTrajectory(vioOutput, odomPose, odomCorrection)) {
+                transformBroadcaster->sendTransform(odomCorrection);
+            }
+            transformBroadcaster->sendTransform(odomPose);
+            // odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
         }
     }
@@ -595,7 +473,7 @@ private:
 
         sensor_msgs::msg::PointCloud2 pc;
         pc.header.stamp = secondsToStamp(primary->cameraPose.pose.time);
-        pc.header.frame_id = vioOutputParentFrameId;
+        pc.header.frame_id = fixedFrameId;
 
         std::string fieldNames[] = {"x", "y", "z", "rgb"};
         uint32_t totalOffset = 0;
@@ -734,13 +612,15 @@ private:
     std::unique_ptr<spectacularAI::Vio> vioApi;
     std::atomic_bool vioInitDone;
     std::mutex vioStartup;
+    std::unique_ptr<PoseHelper> poseHelper;
 
     double previousFrameTime = 0.0;
     double previousImuTime = 0.0;
 
     // Params
-    std::string vioOutputParentFrameId;
-    std::string vioOutputChildFrameId;
+    std::string fixedFrameId;
+    std::string odometryFrameId;
+    std::string baseLinkFrameId;
 
     std::string deviceModel;
     std::string imuFrameId;
@@ -754,6 +634,8 @@ private:
     int frameNumber = 0;
     int64_t latestKeyFrame = -1;
     std::vector<spectacularAI::MonocularFeature> monoFeatures;
+    bool outputOnImuSamples;
+    uint64_t triggerCounter = 1;
 
     // Map
     bool enableOccupancyGrid;
