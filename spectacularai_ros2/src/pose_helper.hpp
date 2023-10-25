@@ -13,17 +13,17 @@
  */
 class PoseHelper {
     bool intialized = false;
-    spectacularAI::Vector3d odomPosBase; // (odometry world frame)
-    double correctionIntervalSeconds = 1.0;
+    spectacularAI::Vector3d odomPosBase;
     double lastCorrection = -1.0;
     double lastTime;
     std::string mapFrameId;
     std::string odomFrameId;
     std::string baseFrameId;
+    double correctionIntervalSeconds;
 
 public:
-    PoseHelper(std::string mapFrameId, std::string odomFrameId, std::string baseFrameId)
-        : mapFrameId(mapFrameId), odomFrameId(odomFrameId), baseFrameId(baseFrameId) {}
+    PoseHelper(std::string mapFrameId, std::string odomFrameId, std::string baseFrameId, double correctionIntervalSeconds)
+        : mapFrameId(mapFrameId), odomFrameId(odomFrameId), baseFrameId(baseFrameId), correctionIntervalSeconds(correctionIntervalSeconds) {}
 
     bool computeContinousTrajectory(spectacularAI::VioOutputPtr vioOutput,
         geometry_msgs::msg::TransformStamped &odomPose,

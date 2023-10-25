@@ -91,6 +91,65 @@ std::string toJson(spectacularAI::Matrix4d m) {
     return ss.str();
 }
 
+void skipWhiteSpace(const std::string& json, size_t& pos) {
+    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
+        pos++;
+    }
+}
+
+double parseNumber(const std::string& json, size_t& pos) {
+    skipWhiteSpace(json, pos);
+    size_t start = pos;
+    while (pos < json.length() && (isdigit(json[pos]) || json[pos] == '.' || json[pos] == '-')) {
+        pos++;
+    }
+    return std::stod(json.substr(start, pos - start));
+}
+
+bool matrixFromJson(const std::string& json, spectacularAI::Matrix4d &m) {
+    std::array<std::array<double, 4>, 4> result;
+    size_t pos = 0;
+
+    skipWhiteSpace(json, pos);
+    if (json[pos] != '[') return false;
+    pos++;
+
+    for (int i = 0; i < 4; i++) {
+        skipWhiteSpace(json, pos);
+        if (json[pos] != '[') return false;
+        pos++;
+
+        for (int j = 0; j < 4; j++) {
+            result[i][j] = parseNumber(json, pos);
+            skipWhiteSpace(json, pos);
+            if (j < 3) {
+                if (json[pos] != ',') {
+                    return false;
+                }
+                pos++;
+            }
+        }
+
+        skipWhiteSpace(json, pos);
+        if (json[pos] != ']') return false;
+        pos++;
+
+        if (i < 3) {
+            if (json[pos] != ',') {
+                return false;
+            }
+            pos++;
+        }
+    }
+
+    if (json[pos] != ']') {
+        return false;
+    }
+
+    m = result;
+    return true;
+}
+
 geometry_msgs::msg::TransformStamped poseToTransformStampped(spectacularAI::Pose pose, std::string frameId, std::string childFrameId) {
     geometry_msgs::msg::TransformStamped tf;
     tf.header.stamp = secondsToStamp(pose.time);

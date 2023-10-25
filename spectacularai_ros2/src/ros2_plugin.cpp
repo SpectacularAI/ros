@@ -55,7 +55,25 @@ static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e
 static const rclcpp::QoS CAMERA_QOS = rclcpp::QoS(rclcpp::KeepLast(CAM_QUEUE_SIZE)).best_effort().durability_volatile();
 
 const char *oakYaml =
-R"(parameterSets: [wrapper-base, oak-d, live]
+R"(# set: wrapper-base
+outputCameraPose: true
+trackChiTestOutlierR: 3
+trackOutlierThresholdGrowthFactor: 1.3
+hybridMapSize: 2
+sampleSyncLag: 1
+trackingStatusInitMinSeconds: 0.5
+cameraTrailLength: 12
+cameraTrailHanoiLength: 8
+delayFrames: 2
+maxSlamResultQueueSize: 2
+# set: oak-d
+imuAnomalyFilterGyroEnabled: true
+imuStationaryEnabled: true
+visualR: 0.01
+skipFirstNFrames: 10
+# set: live
+noWaitingForResults: true
+# custom
 useSlam: True
 ffmpegVideoCodec: "libx264 -crf 15 -preset ultrafast"
 )";
@@ -111,6 +129,14 @@ public:
 
         outputOnImuSamples = declareAndReadParameterBool("output_on_imu_samples", true);
 
+        maxOdomFreq = declareAndReadParameterDouble("max_odom_freq", 100);
+        maxOdomCorrectionFreq = declareAndReadParameterDouble("max_odom_correction_freq", 10);
+
+        overrideImuToCam0  = declareAndReadParameterString("imu_to_cam0", "");
+        overrideImuToCam1  = declareAndReadParameterString("imu_to_cam1", "");
+
+        bool separateOdomTf = declareAndReadParameterBool("separate_odom_tf", false);
+
         transformListenerBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         transformListener = std::make_shared<tf2_ros::TransformListener>(*transformListenerBuffer);
         transformBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -120,7 +146,9 @@ public:
             IMU_QUEUE_SIZE,
             std::bind(&Node::imuCallback, this, std::placeholders::_1));
 
-        poseHelper = std::make_unique<PoseHelper>(fixedFrameId, odometryFrameId, baseLinkFrameId);
+        if (separateOdomTf) {
+            poseHelper = std::make_unique<PoseHelper>(fixedFrameId, odometryFrameId, baseLinkFrameId, 1.0 / maxOdomCorrectionFreq);
+        }
 
         odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
@@ -309,32 +337,69 @@ private:
             RCLCPP_WARN(this->get_logger(), "Received IMU sample (%f) that's older than previous (%f), skipping it.", time, previousImuTime);
             return;
         }
-        previousImuTime = time;
         vioApi->addGyro(time, {msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z});
         vioApi->addAcc(time, {msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z});
-        if (outputOnImuSamples) vioApi->addTrigger(time, triggerCounter++);
+        if (outputOnImuSamples && (time - previousTriggerTime) > (1. / maxOdomFreq)) {
+            vioApi->addTrigger(time, triggerCounter++);
+            previousTriggerTime = time;
+        }
+        previousImuTime = time;
     }
 
     bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1) {
-        if (imuFrameId.empty() && !deviceModel.empty() && !cam0FrameId.empty() && !cam1FrameId.empty()) {
+        if (imuFrameId.empty()
+            && (!deviceModel.empty() || !overrideImuToCam0.empty() || !overrideImuToCam1.empty())
+            && !cam0FrameId.empty()
+            && !cam1FrameId.empty()) {
+
             spectacularAI::Matrix4d imuToCamera;
-            if (!getDeviceImuToCameraMatrix(deviceModel, imuToCamera)) {
+            int camIndex;
+
+            if (!overrideImuToCam0.empty()) {
+                camIndex = 0;
+                if (!matrixFromJson(overrideImuToCam0, imuToCamera)) {
+                    RCLCPP_WARN(this->get_logger(), "Failed to parse imuToCam0 matrix from given JSON string: %s", overrideImuToCam0.c_str());
+                    return false;
+                }
+            } else if (!overrideImuToCam1.empty()) {
+                camIndex = 1;
+                if (!matrixFromJson(overrideImuToCam1, imuToCamera)) {
+                    RCLCPP_WARN(this->get_logger(), "Failed to parse imuToCam0 matrix from given JSON string: %s", overrideImuToCam0.c_str());
+                    return false;
+                }
+            } else if (!getDeviceImuToCameraMatrix(deviceModel, imuToCamera, camIndex)) {
                 RCLCPP_WARN(this->get_logger(), "No stored camera calibration for %s", deviceModel.c_str());
                 return false;
             }
 
-            spectacularAI::Matrix4d cam0ToCam1;
-            try {
-                cam0ToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, cam1FrameId, tf2::TimePointZero));
-            } catch (const tf2::TransformException & ex) {
-                RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
-                return false;
+            if (camIndex == 0) {
+                spectacularAI::Matrix4d cam0ToCam1;
+                try {
+                    cam0ToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, cam1FrameId, tf2::TimePointZero));
+                } catch (const tf2::TransformException & ex) {
+                    RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
+                    return false;
+                }
+                imuToCam0 = imuToCamera;
+                imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
+                // RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam0FrameId.c_str(), cam1FrameId.c_str(), toJson(cam0ToCam1).c_str());
+                // RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
+                // RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
+            } else {
+                spectacularAI::Matrix4d cam1ToCam0;
+                try {
+                    cam1ToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(cam1FrameId, cam0FrameId, tf2::TimePointZero));
+                } catch (const tf2::TransformException & ex) {
+                    RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
+                    return false;
+                }
+                imuToCam1 = imuToCamera;
+                imuToCam0 = matrixMul(cam1ToCam0, imuToCam1);
+                // RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam1FrameId.c_str(), cam0FrameId.c_str(), toJson(cam1ToCam0).c_str());
+                // RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
+                // RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
             }
-            imuToCam0 = imuToCamera;
-            imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
-            // RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam0FrameId.c_str(), cam1FrameId.c_str(), toJson(cam0ToCam1).c_str());
-            // RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
-            // RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
+
 
         } else if (!imuFrameId.empty() && !cam0FrameId.empty() && !cam1FrameId.empty()) {
             try {
@@ -453,12 +518,16 @@ private:
 
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
-            geometry_msgs::msg::TransformStamped odomPose;
-            geometry_msgs::msg::TransformStamped odomCorrection;
-            if (poseHelper->computeContinousTrajectory(vioOutput, odomPose, odomCorrection)) {
-                transformBroadcaster->sendTransform(odomCorrection);
+            if (poseHelper) {
+                geometry_msgs::msg::TransformStamped odomPose;
+                geometry_msgs::msg::TransformStamped odomCorrection;
+                if (poseHelper->computeContinousTrajectory(vioOutput, odomPose, odomCorrection)) {
+                    transformBroadcaster->sendTransform(odomCorrection);
+                }
+                transformBroadcaster->sendTransform(odomPose);
+            } else {
+                transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, fixedFrameId, baseLinkFrameId));
             }
-            transformBroadcaster->sendTransform(odomPose);
             // odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
         }
@@ -616,6 +685,13 @@ private:
 
     double previousFrameTime = 0.0;
     double previousImuTime = 0.0;
+    double previousTriggerTime = 0.0;
+
+    int frameNumber = 0;
+    int64_t latestKeyFrame = -1;
+    std::vector<spectacularAI::MonocularFeature> monoFeatures;
+    bool outputOnImuSamples;
+    uint64_t triggerCounter = 1;
 
     // Params
     std::string fixedFrameId;
@@ -630,12 +706,10 @@ private:
     std::string cameraInputType;
     std::string recordingFolder;
     bool enableMapping;
-
-    int frameNumber = 0;
-    int64_t latestKeyFrame = -1;
-    std::vector<spectacularAI::MonocularFeature> monoFeatures;
-    bool outputOnImuSamples;
-    uint64_t triggerCounter = 1;
+    double maxOdomFreq;
+    double maxOdomCorrectionFreq;
+    std::string overrideImuToCam0;
+    std::string overrideImuToCam1;
 
     // Map
     bool enableOccupancyGrid;
