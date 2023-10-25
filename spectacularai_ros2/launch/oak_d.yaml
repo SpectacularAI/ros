@@ -10,11 +10,11 @@
       i_publish_tf_from_calibration: True
       i_tf_imu_from_descr: 'true'
     left:
-      i_fps: 90.0
-      i_resolution: '400'
+      i_fps: 30.0
+      i_resolution: '400P'
     right:
-      i_fps: 90.0
-      i_resolution: '400'
+      i_fps: 30.0
+      i_resolution: '400P'
     stereo:
       i_align_depth: true
       i_board_socket_id: 2

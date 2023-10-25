@@ -11,21 +11,20 @@ from launch_ros.descriptions import ComposableNode
 
 
 def launch_setup(context, *args, **kwargs):
-
     params_file = LaunchConfiguration("params_file")
     name = LaunchConfiguration('name').perform(context)
     parent_frame = LaunchConfiguration('parent_frame',  default = 'oak-d-base-frame')
     urdf_launch_dir = os.path.join(get_package_share_directory('depthai_descriptions'), 'launch')
-    depthai_prefix = get_package_share_directory("depthai_ros_driver")
+
     return [
-            Node(
-                condition=IfCondition(LaunchConfiguration("use_rviz").perform(context)),
-                package="rviz2",
-                executable="rviz2",
-                name="rviz2",
-                output="log",
-                arguments=["-d", LaunchConfiguration("rviz_config")],
-            ),
+        Node(
+            condition=IfCondition(LaunchConfiguration("use_rviz").perform(context)),
+            package="rviz2",
+            executable="rviz2",
+            name="rviz2",
+            output="log",
+            arguments=["-d", LaunchConfiguration("rviz_config")],
+        ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(urdf_launch_dir, 'urdf_launch.py')),
@@ -34,7 +33,6 @@ def launch_setup(context, *args, **kwargs):
                               'parent_frame': parent_frame,
                               'use_composition': 'true',
                               'use_base_descr': 'true'}.items()),
-
         ComposableNodeContainer(
             name=name+"_container",
             namespace="",
@@ -51,15 +49,19 @@ def launch_setup(context, *args, **kwargs):
                     package='spectacularai_ros2',
                     plugin='spectacularAI::ros2::Node',
                     parameters=[
-                        # Used for extrinsics calibration
+                        {"base_link_frame_id": parent_frame},
                         {"imu_frame_id": name+"_imu_frame"},
-                        {"cam0_frame_id": name + "_right_camera_optical_frame"},
-                        {"cam1_frame_id": name + "_left_camera_optical_frame"},
+                        {"cam0_optical_frame_id": name + "_right_camera_optical_frame"},
+                        {"cam1_optical_frame_id": name + "_left_camera_optical_frame"},
                         {"depth_scale": 1.0/1000.0}, # Depth map values are multiplied with this to get distance in meters
-                        {"camera_input_type": "stereo_depth_features"},
+                        {"camera_input_type": LaunchConfiguration('camera_input_type').perform(context)},
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
                         {"enable_mapping": True},
                         {"enable_occupancy_grid": True},
+                        {"output_on_imu_samples": False},
+                        {"device_model": LaunchConfiguration('device_model').perform(context)}, # Used to fetch imu to camera transformation
+                        {"imu_to_cam0": LaunchConfiguration('imu_to_cam0').perform(context)},
+                        {"imu_to_cam1": LaunchConfiguration('imu_to_cam1').perform(context)}
                     ],
                     remappings=[
                         ('input/imu', name + '/imu/data'),
@@ -87,6 +89,10 @@ def generate_launch_description():
         DeclareLaunchArgument("parent_frame", default_value="oak-d-base-frame"),
         DeclareLaunchArgument("params_file", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.yaml')),
         DeclareLaunchArgument("rviz_config", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.rviz')),
+        DeclareLaunchArgument("camera_input_type", default_value="stereo_depth_features"),
+        DeclareLaunchArgument("device_model", default_value=""),
+        DeclareLaunchArgument("imu_to_cam0", default_value=""),
+        DeclareLaunchArgument("imu_to_cam1", default_value=""),
     ]
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]

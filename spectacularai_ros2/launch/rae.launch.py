@@ -15,20 +15,11 @@ def launch_setup(context, *args, **kwargs):
     params_file = LaunchConfiguration("params_file")
     name = LaunchConfiguration('name').perform(context)
     return [
-            Node(
-                condition=IfCondition(LaunchConfiguration("use_rviz").perform(context)),
-                package="rviz2",
-                executable="rviz2",
-                name="rviz2",
-                output="log",
-                arguments=["-d", LaunchConfiguration("rviz_config")],
-            ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(get_package_share_directory('rae_description'), 'launch', 'rsp.launch.py')),
             launch_arguments={'sim': 'false'}.items()
         ),
-
         ComposableNodeContainer(
             name=name+"_container",
             namespace="",
@@ -53,8 +44,8 @@ def launch_setup(context, *args, **kwargs):
                     plugin='spectacularAI::ros2::Node',
                     parameters=[
                         # Camera extrinsics
-                        {"cam0_frame_id": name + "_right_camera_optical_frame"},
-                        {"cam1_frame_id": name + "_left_camera_optical_frame"},
+                        {"cam0_optical_frame_id": name + "_right_camera_optical_frame"},
+                        {"cam1_optical_frame_id": name + "_left_camera_optical_frame"},
                         {"depth_scale": 1.0/1000.0}, # Depth map values are multiplied with this to get distance in meters
                         {"camera_input_type": "stereo_depth_features"},
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
@@ -86,8 +77,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_rviz", default_value='false'),
         DeclareLaunchArgument("recording_folder", default_value=""),
         DeclareLaunchArgument("parent_frame", default_value="base_footprint"),
-        DeclareLaunchArgument("params_file", default_value=os.path.join(spectacular_prefix, 'launch', 'rae.yaml')),
-        DeclareLaunchArgument("rviz_config", default_value=os.path.join(spectacular_prefix, 'launch', 'mapping.rviz')),
+        DeclareLaunchArgument("params_file", default_value=os.path.join(spectacular_prefix, 'launch', 'rae.yaml'))
     ]
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]

@@ -38,180 +38,45 @@
 #include <spectacularAI/vio.hpp>
 
 // Helpers
+#include "helpers.hpp"
+#include "pose_helper.hpp"
 #include "device_imu_calib.hpp"
 #include "occupancy_grid.hpp"
 
 namespace {
-static double NANOS_TO_SECONDS = 1e-9;
-static double SECONDS_TO_NANOS = 1e9;
-static size_t IMU_QUEUE_SIZE = 1000;
-static size_t ODOM_QUEUE_SIZE = 1000;
-static uint32_t CAM_QUEUE_SIZE = 30;
+constexpr size_t IMU_QUEUE_SIZE = 1000;
+constexpr size_t ODOM_QUEUE_SIZE = 1000;
+constexpr uint32_t CAM_QUEUE_SIZE = 30;
 
-//  message_filters::Synchronize duration for synchronizing different camera inputs
-static rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
+// Group window for camera frames, should always be smaller than time between two frames
+static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
+
+// https://docs.ros.org/en/humble/Concepts/Intermediate/About-Quality-of-Service-Settings.html
+static const rclcpp::QoS CAMERA_QOS = rclcpp::QoS(rclcpp::KeepLast(CAM_QUEUE_SIZE)).best_effort().durability_volatile();
 
 const char *oakYaml =
-R"(imuAnomalyFilterGyroEnabled: True
-imuStationaryEnabled: True
-visualR: 0.01
-skipFirstNFrames: 10
-ffmpegVideoCodec: "libx264 -crf 15 -preset ultrafast"
-)";
-
-const char *baseYaml =
-R"(trackChiTestOutlierR: 3
+R"(# set: wrapper-base
+trackChiTestOutlierR: 3
 trackOutlierThresholdGrowthFactor: 1.3
 hybridMapSize: 2
 sampleSyncLag: 1
-outputCameraPose: False
 trackingStatusInitMinSeconds: 0.5
-)";
-
-const char *slamYaml =
-R"(useSlam: True
+cameraTrailLength: 12
+cameraTrailHanoiLength: 8
 delayFrames: 2
-noWaitingForResults: True
 maxSlamResultQueueSize: 2
+# set: oak-d
+imuAnomalyFilterGyroEnabled: true
+imuStationaryEnabled: true
+visualR: 0.01
+skipFirstNFrames: 10
+# set: live
+noWaitingForResults: true
+# custom
+useSlam: True
+ffmpegVideoCodec: "libx264 -crf 15 -preset ultrafast"
 )";
 
-constexpr size_t DIM = 4;
-
-template <class M> M matMulGeneric(const M &a, const M &b) {
-    M r;
-    for (size_t i = 0; i < DIM; ++i) {
-        for (size_t j = 0; j < DIM; ++j) {
-            r.at(i).at(j) = 0;
-            for (size_t k = 0; k < DIM; ++k) {
-                r.at(i).at(j) += a.at(i).at(k) * b.at(k).at(j);
-            }
-        }
-    }
-    return r;
-}
-
-spectacularAI::Matrix4d matrixMul(const spectacularAI::Matrix4d &a, const spectacularAI::Matrix4d &b) {
-    return matMulGeneric(a, b);
-}
-
-using Matrix4f = std::array<std::array<float, 4>, 4>;
-
-spectacularAI::Vector3f matVectorMult(const Matrix4f &m, const spectacularAI::Vector3f &v) {
-    return {
-        m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z + m[0][3],
-        m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z + m[1][3],
-        m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z + m[2][3]
-    };
-}
-
-Matrix4f matrixToFloat(const spectacularAI::Matrix4d &doubleArray) {
-    std::array<std::array<float, 4>, 4> floatArray;
-    for (size_t i = 0; i < 4; ++i) {
-        for (size_t j = 0; j < 4; ++j) {
-            floatArray[i][j] = static_cast<float>(doubleArray[i][j]);
-        }
-    }
-    return floatArray;
-}
-
-spectacularAI::Matrix4d matrixConvert(geometry_msgs::msg::TransformStamped tf) {
-    auto t = tf.transform.translation;
-    tf2::Quaternion q;
-    tf2::fromMsg(tf.transform.rotation, q);
-    auto r = tf2::Matrix3x3(q);
-    return {{
-        {r[0][0], r[0][1], r[0][2], t.x},
-        {r[1][0], r[1][1], r[1][2], t.y},
-        {r[2][0], r[2][1], r[2][2], t.z},
-        {0.0, 0.0, 0.0, 1.0}
-    }};
-}
-
-double stampToSeconds(std_msgs::msg::Header::Header_::_stamp_type stamp) {
-    return (int64_t)stamp.sec + (int64_t)stamp.nanosec * NANOS_TO_SECONDS;
-}
-
-std_msgs::msg::Header::Header_::_stamp_type secondsToStamp(double seconds) {
-    std_msgs::msg::Header::Header_::_stamp_type stamp;
-    stamp.sec = std::floor(seconds);
-    stamp.nanosec = (seconds - stamp.sec) * SECONDS_TO_NANOS;
-    return stamp;
-}
-
-std::string toJson(spectacularAI::Matrix4d m) {
-    std::ostringstream ss;
-    ss << std::setprecision(18);
-    ss << "[";
-    ss << "[" << m[0][0] << "," << m[0][1] << "," << m[0][2] << "," << m[0][3] << "],";
-    ss << "[" << m[1][0] << "," << m[1][1] << "," << m[1][2] << "," << m[1][3] << "],";
-    ss << "[" << m[2][0] << "," << m[2][1] << "," << m[2][2] << "," << m[2][3] << "],";
-    ss << "[" << m[3][0] << "," << m[3][1] << "," << m[3][2] << "," << m[3][3] << "]";
-    ss << "]";
-    return ss.str();
-}
-
-geometry_msgs::msg::TransformStamped poseToTransformStampped(spectacularAI::Pose pose, std::string frameId, std::string childFrameId) {
-    geometry_msgs::msg::TransformStamped tf;
-    tf.header.stamp = secondsToStamp(pose.time);
-    tf.header.frame_id = frameId;
-    tf.child_frame_id = childFrameId;
-    tf.transform.translation.x = pose.position.x;
-    tf.transform.translation.y = pose.position.y;
-    tf.transform.translation.z = pose.position.z;
-    tf.transform.rotation.x = pose.orientation.x;
-    tf.transform.rotation.y = pose.orientation.y;
-    tf.transform.rotation.z = pose.orientation.z;
-    tf.transform.rotation.w = pose.orientation.w;
-    return tf;
-}
-
-nav_msgs::msg::Odometry outputToOdometryMsg(spectacularAI::VioOutputPtr output, std::string frameId, std::string childFrameId) {
-    auto& pose = output->pose;
-
-    nav_msgs::msg::Odometry odom;
-    odom.header.stamp = secondsToStamp(pose.time);
-    odom.header.frame_id = frameId;
-    odom.child_frame_id = childFrameId;
-
-    odom.pose.pose.position.x = pose.position.x;
-    odom.pose.pose.position.y = pose.position.y;
-    odom.pose.pose.position.z = pose.position.z;
-    odom.pose.pose.orientation.x = pose.orientation.x;
-    odom.pose.pose.orientation.y = pose.orientation.y;
-    odom.pose.pose.orientation.z = pose.orientation.z;
-    odom.pose.pose.orientation.w = pose.orientation.w;
-
-    // Row-major representation of the 6x6 covariance matrix
-    auto& pc = output->positionCovariance;
-    odom.pose.covariance = {
-        pc[0][0], pc[0][1], pc[0][2], 0, 0, 0,
-        pc[1][0], pc[1][1], pc[1][2], 0, 0, 0,
-        pc[2][0], pc[2][1], pc[2][2], 0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0
-    };
-
-    odom.twist.twist.linear.x = output->velocity.x;
-    odom.twist.twist.linear.y = output->velocity.y;
-    odom.twist.twist.linear.z = output->velocity.z;
-    odom.twist.twist.angular.x = output->angularVelocity.x;
-    odom.twist.twist.angular.y = output->angularVelocity.y;
-    odom.twist.twist.angular.z = output->angularVelocity.z;
-
-    // Row-major representation of the 6x6 covariance matrix
-    auto& vc = output->velocityCovariance;
-    odom.twist.covariance = {
-        vc[0][0], vc[0][1], vc[0][2], 0, 0, 0,
-        vc[1][0], vc[1][1], vc[1][2], 0, 0, 0,
-        vc[2][0], vc[2][1], vc[2][2], 0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0,
-        0, 0, 0,                      0, 0, 0
-    };
-
-    return odom;
-}
 
 using StereoCameraPolicy = message_filters::sync_policies::ApproximateTime<
         sensor_msgs::msg::CameraInfo, sensor_msgs::msg::CameraInfo,
@@ -251,14 +116,25 @@ public:
         cam1FrameId = declareAndReadParameterString("cam1_optical_frame_id", "");
 
         // Output frames
-        vioOutputParentFrameId = declareAndReadParameterString("vio_output_parent_frame_id", "map");
-        vioOutputChildFrameId = declareAndReadParameterString("vio_output_parent_child_frame_id", "base_link");
+        fixedFrameId = declareAndReadParameterString("fixed_frame_id", "map");
+        odometryFrameId = declareAndReadParameterString("odometry_frame_id", "odom");
+        baseLinkFrameId = declareAndReadParameterString("base_link_frame_id", "base_link");
 
         depthScale = declareAndReadParameterDouble("depth_scale", 1.0 / 1000.0);
         recordingFolder = declareAndReadParameterString("recording_folder", "");
         enableMapping = declareAndReadParameterBool("enable_mapping", true);
         enableOccupancyGrid = declareAndReadParameterBool("enable_occupancy_grid", false);
         cameraInputType = declareAndReadParameterString("camera_input_type", "stereo_depth_features");
+
+        outputOnImuSamples = declareAndReadParameterBool("output_on_imu_samples", false);
+
+        maxOdomFreq = declareAndReadParameterDouble("max_odom_freq", 100);
+        maxOdomCorrectionFreq = declareAndReadParameterDouble("max_odom_correction_freq", 10);
+
+        overrideImuToCam0  = declareAndReadParameterString("imu_to_cam0", "");
+        overrideImuToCam1  = declareAndReadParameterString("imu_to_cam1", "");
+
+        bool separateOdomTf = declareAndReadParameterBool("separate_odom_tf", false);
 
         transformListenerBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         transformListener = std::make_shared<tf2_ros::TransformListener>(*transformListenerBuffer);
@@ -269,15 +145,19 @@ public:
             IMU_QUEUE_SIZE,
             std::bind(&Node::imuCallback, this, std::placeholders::_1));
 
+        if (separateOdomTf) {
+            poseHelper = std::make_unique<PoseHelper>(fixedFrameId, odometryFrameId, baseLinkFrameId, 1.0 / maxOdomCorrectionFreq);
+        }
+
         odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
         if (enableMapping) pointCloudPublisher = this->create_publisher<sensor_msgs::msg::PointCloud2>("output/pointcloud", ODOM_QUEUE_SIZE);
 
         if (cameraInputType == "stereo") {
-            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info");
-            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info");
-            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect");
-            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect");
+            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect", CAMERA_QOS.get_rmw_qos_profile());
 
             stereoCameraSynchronizer = std::make_unique<StereoCameraSynchronizer>(StereoCameraPolicy(CAM_QUEUE_SIZE),
                 cameraInfo0Subscription, cameraInfo1Subscription,
@@ -286,14 +166,13 @@ public:
             stereoCameraSynchronizer->registerCallback(std::bind(&Node::stereoCameraCallback, this,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
         } else if (cameraInputType == "stereo_depth_features") {
-            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info");
-            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info");
-            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect");
-            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect");
-            cameraDepthSubscription.subscribe(this, "/input/depth/image");
-            depthaiTrackedFeaturesCam0Subscription.subscribe(this, "/input/cam0/features");
+            cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraInfo1Subscription.subscribe(this, "/input/cam1/camera_info", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage0Subscription.subscribe(this, "/input/cam0/image_rect", CAMERA_QOS.get_rmw_qos_profile());
+            cameraImage1Subscription.subscribe(this, "/input/cam1/image_rect", CAMERA_QOS.get_rmw_qos_profile());
+            cameraDepthSubscription.subscribe(this, "/input/depth/image", CAMERA_QOS.get_rmw_qos_profile());
+            depthaiTrackedFeaturesCam0Subscription.subscribe(this, "/input/cam0/features", CAMERA_QOS.get_rmw_qos_profile());
 
-            // TODO: cameraImage1Subscription shouldn't be needed, but Synchronizer failed to produce output without it
             stereoDepthCameraSynchronizer = std::make_unique<StereoDepthCameraSynchronizer>(StereoDepthCameraPolicy(CAM_QUEUE_SIZE),
                 cameraInfo0Subscription, cameraInfo1Subscription,
                 cameraImage0Subscription, cameraImage1Subscription,
@@ -309,10 +188,7 @@ public:
 private:
     std::string createConfigYaml() {
         std::ostringstream oss;
-        oss << baseYaml;
-        oss << slamYaml;
         oss << oakYaml;
-
         oss << "alreadyRectified: True\n";
 
         bool useFeatureTracker = cameraInputType == "stereo_depth_features";
@@ -330,6 +206,10 @@ private:
             oss << "computeDenseStereoDepthKeyFramesOnly: True\n";
             oss << "stereoPointCloudStride: 5\n";
             oss << "stereoPointCloudMinDepth: " << minDepth << "\n";
+        }
+
+        if (outputOnImuSamples) {
+            oss << "outputOnFrames: False\n";
         }
 
         return oss.str();
@@ -351,14 +231,18 @@ private:
         return "unknown";
     }
 
-    bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<spectacularAI::Matrix4d> extrinsics, bool isRectified, std::string &calibrationJson) {
+    bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<spectacularAI::Matrix4d> extrinsics,
+        const spectacularAI::Matrix4d imuToOutput, bool isRectified, std::string &calibrationJson) {
         // https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg
         std::ostringstream calib;
         calib << std::setprecision(18);
         calib << "{";
+        calib << "\"imuToOutput\":" << toJson(imuToOutput) << ",";
         calib << "\"cameras\": [";
         for (size_t i = 0; i < intrinsics.size(); i++) {
             auto& intr = intrinsics[i];
+
+            spectacularAI::Matrix4d imuToCam = extrinsics[i];
 
             std::string model = rosToSaiDistortionModel(intr->distortion_model);
             double fx, fy, px, py;
@@ -373,8 +257,13 @@ private:
                 px = intr->p[2];
                 py = intr->p[6];
 
-                // Seems like rectification rotation `intr->r` is applied because the imuToCamera
-                // matrix rotation parts are identical in both cameras of stereo.
+                // Apply rectification rotation to imuToCamera matrix
+                auto R = matrixConvert(intr->r);
+                if (R[0][0] == 1 && R[1][1] == 1 && R[2][2] == 1 ) {
+                    RCLCPP_WARN(this->get_logger(), "Rectification rotation is identity, this is likely incorrect %s", toJson(R).c_str());
+                }
+                imuToCam = setRotation(imuToCam, matrixMul(R, getRotation(imuToCam)));
+
                 model = "pinhole";
             } else {
                 // Intrinsic camera matrix for the raw (distorted) images.
@@ -396,7 +285,7 @@ private:
             calib << "\"principalPointY\":" << py << ",";
             calib << "\"imageHeight\":" << intr->height << ",";
             calib << "\"imageWidth\":" << intr->width << ",";
-            calib << "\"imuToCamera\": " << toJson(extrinsics[i]) << ",";
+            calib << "\"imuToCamera\": " << toJson(imuToCam) << ",";
             if (model != "pinhole") {
                 calib << "\"distortionCoefficients\": [";
                 for (size_t j = 0; j < intr->d.size(); j++) {
@@ -456,33 +345,75 @@ private:
             RCLCPP_WARN(this->get_logger(), "Received IMU sample (%f) that's older than previous (%f), skipping it.", time, previousImuTime);
             return;
         }
-        previousImuTime = time;
         vioApi->addGyro(time, {msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z});
         vioApi->addAcc(time, {msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z});
+        if (outputOnImuSamples && (time - previousTriggerTime) > (1. / maxOdomFreq)) {
+            vioApi->addTrigger(time, triggerCounter++);
+            previousTriggerTime = time;
+        }
+        previousImuTime = time;
     }
 
-    bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1) {
-        if (imuFrameId.empty() && !deviceModel.empty()) {
-            spectacularAI::Matrix4d imuToCamera;
-            if (!getDeviceImuToCameraMatrix(deviceModel, imuToCamera)) {
-                RCLCPP_WARN(this->get_logger(), "No stored camera calibration for %s", deviceModel.c_str());
+    bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1, spectacularAI::Matrix4d &imuToOutput) {
+        if ((!deviceModel.empty() || !overrideImuToCam0.empty() || !overrideImuToCam1.empty())
+            && !cam0FrameId.empty()
+            && !cam1FrameId.empty()) {
+
+            spectacularAI::Matrix4d imuToCameraX;
+            int camIndex = 0;
+
+            if (!overrideImuToCam0.empty()) {
+                camIndex = 0;
+                if (!matrixFromJson(overrideImuToCam0, imuToCameraX)) {
+                    RCLCPP_WARN(this->get_logger(), "Failed to parse imuToCam0 matrix from given JSON string: %s", overrideImuToCam0.c_str());
+                    return false;
+                }
+                RCLCPP_INFO(this->get_logger(), "Using given imuToCam0 calibration");
+            } else if (!overrideImuToCam1.empty()) {
+                camIndex = 1;
+                if (!matrixFromJson(overrideImuToCam1, imuToCameraX)) {
+                    RCLCPP_WARN(this->get_logger(), "Failed to parse imuToCam0 matrix from given JSON string: %s", overrideImuToCam0.c_str());
+                    return false;
+                }
+                RCLCPP_INFO(this->get_logger(), "Using given imuToCam1 calibration");
+            } else if (!deviceModel.empty()) {
+                if (!getDeviceImuToCameraMatrix(deviceModel, imuToCameraX, camIndex)) {
+                    RCLCPP_WARN(this->get_logger(), "No stored camera calibration for %s", deviceModel.c_str());
+                    return false;
+                }
+                RCLCPP_INFO(this->get_logger(), "Using imuToCamera calibration based on device model");
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Failed to find any imuToCamera calibration");
                 return false;
             }
 
-            spectacularAI::Matrix4d cam0ToCam1;
-            try {
-                cam0ToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, cam1FrameId, tf2::TimePointZero));
-            } catch (const tf2::TransformException & ex) {
-                RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
-                return false;
+            if (camIndex == 0) {
+                spectacularAI::Matrix4d cam0ToCam1;
+                try {
+                    cam0ToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam1FrameId, cam0FrameId, tf2::TimePointZero));
+                } catch (const tf2::TransformException & ex) {
+                    RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
+                    return false;
+                }
+                imuToCam0 = imuToCameraX;
+                imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
+            } else {
+                spectacularAI::Matrix4d cam1ToCam0;
+                try {
+                    cam1ToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, cam1FrameId, tf2::TimePointZero));
+                } catch (const tf2::TransformException & ex) {
+                    RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
+                    return false;
+                }
+                imuToCam1 = imuToCameraX;
+                imuToCam0 = matrixMul(cam1ToCam0, imuToCam1);
             }
-            imuToCam0 = imuToCamera;
-            imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
 
-        } else if (!imuFrameId.empty()) {
+
+        } else if (!imuFrameId.empty() && !cam0FrameId.empty() && !cam1FrameId.empty()) {
             try {
-                imuToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam0FrameId, tf2::TimePointZero));
-                imuToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam1FrameId, tf2::TimePointZero));
+                imuToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, imuFrameId, tf2::TimePointZero));
+                imuToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam1FrameId, imuFrameId, tf2::TimePointZero));
             } catch (const tf2::TransformException & ex) {
                 RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
                 return false;
@@ -493,6 +424,15 @@ private:
             return false;
         }
 
+        spectacularAI::Matrix4d cam0ToBaseLink;
+
+        try {
+            cam0ToBaseLink = matrixConvert(transformListenerBuffer->lookupTransform(baseLinkFrameId, cam0FrameId, tf2::TimePointZero));
+        } catch (const tf2::TransformException & ex) {
+            RCLCPP_WARN(this->get_logger(), "Could not get camera transforms for computing imuToOutput: %s", ex.what());
+            return false;
+        }
+        imuToOutput = matrixMul(cam0ToBaseLink, imuToCam0);
         return true;
     }
 
@@ -501,11 +441,11 @@ private:
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1) {
 
         if (!vioInitDone) {
-            spectacularAI::Matrix4d imuToCam0, imuToCam1;
-            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1)) return;
+            spectacularAI::Matrix4d imuToCam0, imuToCam1, imuToOutput;
+            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1, imuToOutput)) return;
             // TODO: Support non rectified images, by ROS convention "image" topic is unrectified, "image_rect" is rectified
             constexpr bool IS_RECTIFIED = true;
-            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, IS_RECTIFIED);
+            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, imuToOutput, IS_RECTIFIED);
         }
 
         if (vioInitDone && !vioApi) return;
@@ -541,16 +481,15 @@ private:
         const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo0, const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo1,
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1,
         const sensor_msgs::msg::Image::ConstSharedPtr &depth, const depthai_ros_msgs::msg::TrackedFeatures::ConstSharedPtr &features) {
-        (void)img1;
 
-        // RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
+        //RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
 
         if (!vioInitDone) {
-            spectacularAI::Matrix4d imuToCam0, imuToCam1;
-            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1)) return;
+            spectacularAI::Matrix4d imuToCam0, imuToCam1, imuToOutput;
+            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1, imuToOutput)) return;
             // TODO: Support non rectified images, by ROS convention "image" topic is unrectified, "image_rect" is rectified
             constexpr bool IS_RECTIFIED = true;
-            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, IS_RECTIFIED);
+            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, imuToOutput, IS_RECTIFIED);
         }
 
         if (vioInitDone && !vioApi) return;
@@ -597,8 +536,17 @@ private:
 
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
-            transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, vioOutputParentFrameId, vioOutputChildFrameId));
-            odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
+            if (poseHelper) {
+                geometry_msgs::msg::TransformStamped odomPose;
+                geometry_msgs::msg::TransformStamped odomCorrection;
+                if (poseHelper->computeContinousTrajectory(vioOutput, odomPose, odomCorrection)) {
+                    transformBroadcaster->sendTransform(odomCorrection);
+                }
+                transformBroadcaster->sendTransform(odomPose);
+            } else {
+                transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, fixedFrameId, baseLinkFrameId));
+            }
+            // odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
         }
     }
@@ -612,7 +560,7 @@ private:
 
         sensor_msgs::msg::PointCloud2 pc;
         pc.header.stamp = secondsToStamp(primary->cameraPose.pose.time);
-        pc.header.frame_id = vioOutputParentFrameId;
+        pc.header.frame_id = fixedFrameId;
 
         std::string fieldNames[] = {"x", "y", "z", "rgb"};
         uint32_t totalOffset = 0;
@@ -703,12 +651,12 @@ private:
         }
     }
 
-    void startVio(std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, std::vector<spectacularAI::Matrix4d> extrinsics, bool isRectified) {
+    void startVio(std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, std::vector<spectacularAI::Matrix4d> extrinsics, spectacularAI::Matrix4d imuToOutput, bool isRectified) {
         std::lock_guard<std::mutex> lock(vioStartup);
         if (vioInitDone) return;
 
         std::string calibrationJson;
-        if (!cameraInfoToCalibrationJson(intrinsics, extrinsics, isRectified, calibrationJson)) {
+        if (!cameraInfoToCalibrationJson(intrinsics, extrinsics, imuToOutput, isRectified, calibrationJson)) {
             vioInitDone = true;
             return;
         }
@@ -751,13 +699,22 @@ private:
     std::unique_ptr<spectacularAI::Vio> vioApi;
     std::atomic_bool vioInitDone;
     std::mutex vioStartup;
+    std::unique_ptr<PoseHelper> poseHelper;
 
     double previousFrameTime = 0.0;
     double previousImuTime = 0.0;
+    double previousTriggerTime = 0.0;
+
+    int frameNumber = 0;
+    int64_t latestKeyFrame = -1;
+    std::vector<spectacularAI::MonocularFeature> monoFeatures;
+    bool outputOnImuSamples;
+    uint64_t triggerCounter = 1;
 
     // Params
-    std::string vioOutputParentFrameId;
-    std::string vioOutputChildFrameId;
+    std::string fixedFrameId;
+    std::string odometryFrameId;
+    std::string baseLinkFrameId;
 
     std::string deviceModel;
     std::string imuFrameId;
@@ -767,10 +724,10 @@ private:
     std::string cameraInputType;
     std::string recordingFolder;
     bool enableMapping;
-
-    int frameNumber = 0;
-    int64_t latestKeyFrame = -1;
-    std::vector<spectacularAI::MonocularFeature> monoFeatures;
+    double maxOdomFreq;
+    double maxOdomCorrectionFreq;
+    std::string overrideImuToCam0;
+    std::string overrideImuToCam1;
 
     // Map
     bool enableOccupancyGrid;
