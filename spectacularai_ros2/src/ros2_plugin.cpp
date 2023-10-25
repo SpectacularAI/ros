@@ -56,7 +56,6 @@ static const rclcpp::QoS CAMERA_QOS = rclcpp::QoS(rclcpp::KeepLast(CAM_QUEUE_SIZ
 
 const char *oakYaml =
 R"(# set: wrapper-base
-outputCameraPose: true
 trackChiTestOutlierR: 3
 trackOutlierThresholdGrowthFactor: 1.3
 hybridMapSize: 2
@@ -232,11 +231,13 @@ private:
         return "unknown";
     }
 
-    bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<spectacularAI::Matrix4d> extrinsics, bool isRectified, std::string &calibrationJson) {
+    bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<spectacularAI::Matrix4d> extrinsics,
+        const spectacularAI::Matrix4d imuToOutput, bool isRectified, std::string &calibrationJson) {
         // https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg
         std::ostringstream calib;
         calib << std::setprecision(18);
         calib << "{";
+        calib << "\"imuToOutput\":" << toJson(imuToOutput) << ",";
         calib << "\"cameras\": [";
         for (size_t i = 0; i < intrinsics.size(); i++) {
             auto& intr = intrinsics[i];
@@ -353,7 +354,7 @@ private:
         previousImuTime = time;
     }
 
-    bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1) {
+    bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1, spectacularAI::Matrix4d &imuToOutput) {
         if ((!deviceModel.empty() || !overrideImuToCam0.empty() || !overrideImuToCam1.empty())
             && !cam0FrameId.empty()
             && !cam1FrameId.empty()) {
@@ -423,6 +424,15 @@ private:
             return false;
         }
 
+        spectacularAI::Matrix4d cam0ToBaseLink;
+
+        try {
+            cam0ToBaseLink = matrixConvert(transformListenerBuffer->lookupTransform(baseLinkFrameId, cam0FrameId, tf2::TimePointZero));
+        } catch (const tf2::TransformException & ex) {
+            RCLCPP_WARN(this->get_logger(), "Could not get camera transforms for computing imuToOutput: %s", ex.what());
+            return false;
+        }
+        imuToOutput = matrixMul(cam0ToBaseLink, imuToCam0);
         return true;
     }
 
@@ -431,11 +441,11 @@ private:
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1) {
 
         if (!vioInitDone) {
-            spectacularAI::Matrix4d imuToCam0, imuToCam1;
-            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1)) return;
+            spectacularAI::Matrix4d imuToCam0, imuToCam1, imuToOutput;
+            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1, imuToOutput)) return;
             // TODO: Support non rectified images, by ROS convention "image" topic is unrectified, "image_rect" is rectified
             constexpr bool IS_RECTIFIED = true;
-            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, IS_RECTIFIED);
+            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, imuToOutput, IS_RECTIFIED);
         }
 
         if (vioInitDone && !vioApi) return;
@@ -475,11 +485,11 @@ private:
         //RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
 
         if (!vioInitDone) {
-            spectacularAI::Matrix4d imuToCam0, imuToCam1;
-            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1)) return;
+            spectacularAI::Matrix4d imuToCam0, imuToCam1, imuToOutput;
+            if (!getStereoCameraExtrinsics(imuToCam0, imuToCam1, imuToOutput)) return;
             // TODO: Support non rectified images, by ROS convention "image" topic is unrectified, "image_rect" is rectified
             constexpr bool IS_RECTIFIED = true;
-            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, IS_RECTIFIED);
+            startVio({camInfo0, camInfo1}, {imuToCam0, imuToCam1}, imuToOutput, IS_RECTIFIED);
         }
 
         if (vioInitDone && !vioApi) return;
@@ -641,12 +651,12 @@ private:
         }
     }
 
-    void startVio(std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, std::vector<spectacularAI::Matrix4d> extrinsics, bool isRectified) {
+    void startVio(std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, std::vector<spectacularAI::Matrix4d> extrinsics, spectacularAI::Matrix4d imuToOutput, bool isRectified) {
         std::lock_guard<std::mutex> lock(vioStartup);
         if (vioInitDone) return;
 
         std::string calibrationJson;
-        if (!cameraInfoToCalibrationJson(intrinsics, extrinsics, isRectified, calibrationJson)) {
+        if (!cameraInfoToCalibrationJson(intrinsics, extrinsics, imuToOutput, isRectified, calibrationJson)) {
             vioInitDone = true;
             return;
         }
