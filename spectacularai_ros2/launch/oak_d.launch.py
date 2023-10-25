@@ -50,6 +50,7 @@ def launch_setup(context, *args, **kwargs):
                     plugin='spectacularAI::ros2::Node',
                     parameters=[
                         {"base_link_frame_id": parent_frame},
+                        {"imu_frame_id": name+"_imu_frame"},
                         {"cam0_optical_frame_id": name + "_right_camera_optical_frame"},
                         {"cam1_optical_frame_id": name + "_left_camera_optical_frame"},
                         {"depth_scale": 1.0/1000.0}, # Depth map values are multiplied with this to get distance in meters
@@ -57,8 +58,10 @@ def launch_setup(context, *args, **kwargs):
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
                         {"enable_mapping": True},
                         {"enable_occupancy_grid": True},
+                        {"output_on_imu_samples": False},
                         {"device_model": LaunchConfiguration('device_model').perform(context)}, # Used to fetch imu to camera transformation
-                        {"imu_to_cam0": LaunchConfiguration('imu_to_cam0').perform(context)} # Overried imu to cam0 transformation
+                        {"imu_to_cam0": LaunchConfiguration('imu_to_cam0').perform(context)},
+                        {"imu_to_cam1": LaunchConfiguration('imu_to_cam1').perform(context)}
                     ],
                     remappings=[
                         ('input/imu', name + '/imu/data'),
@@ -87,8 +90,9 @@ def generate_launch_description():
         DeclareLaunchArgument("params_file", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.yaml')),
         DeclareLaunchArgument("rviz_config", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.rviz')),
         DeclareLaunchArgument("camera_input_type", default_value="stereo_depth_features"),
-        DeclareLaunchArgument("device_model", default_value="OAK-D"),
+        DeclareLaunchArgument("device_model", default_value=""),
         DeclareLaunchArgument("imu_to_cam0", default_value=""),
+        DeclareLaunchArgument("imu_to_cam1", default_value=""),
     ]
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]

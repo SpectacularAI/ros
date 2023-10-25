@@ -127,7 +127,7 @@ public:
         enableOccupancyGrid = declareAndReadParameterBool("enable_occupancy_grid", false);
         cameraInputType = declareAndReadParameterString("camera_input_type", "stereo_depth_features");
 
-        outputOnImuSamples = declareAndReadParameterBool("output_on_imu_samples", true);
+        outputOnImuSamples = declareAndReadParameterBool("output_on_imu_samples", false);
 
         maxOdomFreq = declareAndReadParameterDouble("max_odom_freq", 100);
         maxOdomCorrectionFreq = declareAndReadParameterDouble("max_odom_correction_freq", 10);
@@ -241,6 +241,8 @@ private:
         for (size_t i = 0; i < intrinsics.size(); i++) {
             auto& intr = intrinsics[i];
 
+            spectacularAI::Matrix4d imuToCam = extrinsics[i];
+
             std::string model = rosToSaiDistortionModel(intr->distortion_model);
             double fx, fy, px, py;
 
@@ -254,8 +256,13 @@ private:
                 px = intr->p[2];
                 py = intr->p[6];
 
-                // Seems like rectification rotation `intr->r` is applied because the imuToCamera
-                // matrix rotation parts are identical in both cameras of stereo.
+                // Apply rectification rotation to imuToCamera matrix
+                auto R = matrixConvert(intr->r);
+                if (R[0][0] == 1 && R[1][1] == 1 && R[2][2] == 1 ) {
+                    RCLCPP_WARN(this->get_logger(), "Rectification rotation is identity, this is likely incorrect %s", toJson(R).c_str());
+                }
+                imuToCam = setRotation(imuToCam, matrixMul(R, getRotation(imuToCam)));
+
                 model = "pinhole";
             } else {
                 // Intrinsic camera matrix for the raw (distorted) images.
@@ -277,7 +284,7 @@ private:
             calib << "\"principalPointY\":" << py << ",";
             calib << "\"imageHeight\":" << intr->height << ",";
             calib << "\"imageWidth\":" << intr->width << ",";
-            calib << "\"imuToCamera\": " << toJson(extrinsics[i]) << ",";
+            calib << "\"imuToCamera\": " << toJson(imuToCam) << ",";
             if (model != "pinhole") {
                 calib << "\"distortionCoefficients\": [";
                 for (size_t j = 0; j < intr->d.size(); j++) {
@@ -347,64 +354,65 @@ private:
     }
 
     bool getStereoCameraExtrinsics(spectacularAI::Matrix4d &imuToCam0, spectacularAI::Matrix4d &imuToCam1) {
-        if (imuFrameId.empty()
-            && (!deviceModel.empty() || !overrideImuToCam0.empty() || !overrideImuToCam1.empty())
+        if ((!deviceModel.empty() || !overrideImuToCam0.empty() || !overrideImuToCam1.empty())
             && !cam0FrameId.empty()
             && !cam1FrameId.empty()) {
 
-            spectacularAI::Matrix4d imuToCamera;
-            int camIndex;
+            spectacularAI::Matrix4d imuToCameraX;
+            int camIndex = 0;
 
             if (!overrideImuToCam0.empty()) {
                 camIndex = 0;
-                if (!matrixFromJson(overrideImuToCam0, imuToCamera)) {
+                if (!matrixFromJson(overrideImuToCam0, imuToCameraX)) {
                     RCLCPP_WARN(this->get_logger(), "Failed to parse imuToCam0 matrix from given JSON string: %s", overrideImuToCam0.c_str());
                     return false;
                 }
+                RCLCPP_INFO(this->get_logger(), "Using given imuToCam0 calibration");
             } else if (!overrideImuToCam1.empty()) {
                 camIndex = 1;
-                if (!matrixFromJson(overrideImuToCam1, imuToCamera)) {
+                if (!matrixFromJson(overrideImuToCam1, imuToCameraX)) {
                     RCLCPP_WARN(this->get_logger(), "Failed to parse imuToCam0 matrix from given JSON string: %s", overrideImuToCam0.c_str());
                     return false;
                 }
-            } else if (!getDeviceImuToCameraMatrix(deviceModel, imuToCamera, camIndex)) {
-                RCLCPP_WARN(this->get_logger(), "No stored camera calibration for %s", deviceModel.c_str());
+                RCLCPP_INFO(this->get_logger(), "Using given imuToCam1 calibration");
+            } else if (!deviceModel.empty()) {
+                if (!getDeviceImuToCameraMatrix(deviceModel, imuToCameraX, camIndex)) {
+                    RCLCPP_WARN(this->get_logger(), "No stored camera calibration for %s", deviceModel.c_str());
+                    return false;
+                }
+                RCLCPP_INFO(this->get_logger(), "Using imuToCamera calibration based on device model");
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Failed to find any imuToCamera calibration");
                 return false;
             }
 
             if (camIndex == 0) {
                 spectacularAI::Matrix4d cam0ToCam1;
                 try {
-                    cam0ToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, cam1FrameId, tf2::TimePointZero));
+                    cam0ToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam1FrameId, cam0FrameId, tf2::TimePointZero));
                 } catch (const tf2::TransformException & ex) {
                     RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
                     return false;
                 }
-                imuToCam0 = imuToCamera;
+                imuToCam0 = imuToCameraX;
                 imuToCam1 = matrixMul(cam0ToCam1, imuToCam0);
-                // RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam0FrameId.c_str(), cam1FrameId.c_str(), toJson(cam0ToCam1).c_str());
-                // RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
-                // RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
             } else {
                 spectacularAI::Matrix4d cam1ToCam0;
                 try {
-                    cam1ToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(cam1FrameId, cam0FrameId, tf2::TimePointZero));
+                    cam1ToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, cam1FrameId, tf2::TimePointZero));
                 } catch (const tf2::TransformException & ex) {
                     RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
                     return false;
                 }
-                imuToCam1 = imuToCamera;
+                imuToCam1 = imuToCameraX;
                 imuToCam0 = matrixMul(cam1ToCam0, imuToCam1);
-                // RCLCPP_WARN(this->get_logger(), "cam0ToCam1 (%s to %s): %s", cam1FrameId.c_str(), cam0FrameId.c_str(), toJson(cam1ToCam0).c_str());
-                // RCLCPP_WARN(this->get_logger(), "imuToCam0: %s", toJson(imuToCam0).c_str());
-                // RCLCPP_WARN(this->get_logger(), "imuToCam1: %s", toJson(imuToCam1).c_str());
             }
 
 
         } else if (!imuFrameId.empty() && !cam0FrameId.empty() && !cam1FrameId.empty()) {
             try {
-                imuToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam0FrameId, tf2::TimePointZero));
-                imuToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(imuFrameId, cam1FrameId, tf2::TimePointZero));
+                imuToCam0 = matrixConvert(transformListenerBuffer->lookupTransform(cam0FrameId, imuFrameId, tf2::TimePointZero));
+                imuToCam1 = matrixConvert(transformListenerBuffer->lookupTransform(cam1FrameId, imuFrameId, tf2::TimePointZero));
             } catch (const tf2::TransformException & ex) {
                 RCLCPP_WARN(this->get_logger(), "Could not get camera transforms: %s", ex.what());
                 return false;

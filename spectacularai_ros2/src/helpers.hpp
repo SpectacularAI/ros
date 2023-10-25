@@ -7,9 +7,8 @@
 
 constexpr double NANOS_TO_SECONDS = 1e-9;
 constexpr double SECONDS_TO_NANOS = 1e9;
-constexpr size_t DIM = 4;
 
-template <class M> M matMulGeneric(const M &a, const M &b) {
+template <class M, unsigned int DIM> M matMulGeneric(const M &a, const M &b) {
     M r;
     for (size_t i = 0; i < DIM; ++i) {
         for (size_t j = 0; j < DIM; ++j) {
@@ -23,7 +22,11 @@ template <class M> M matMulGeneric(const M &a, const M &b) {
 }
 
 spectacularAI::Matrix4d matrixMul(const spectacularAI::Matrix4d &a, const spectacularAI::Matrix4d &b) {
-    return matMulGeneric(a, b);
+    return matMulGeneric<spectacularAI::Matrix4d, 4>(a, b);
+}
+
+spectacularAI::Matrix3d matrixMul(const spectacularAI::Matrix3d &a, const spectacularAI::Matrix3d &b) {
+    return matMulGeneric<spectacularAI::Matrix3d, 3>(a, b);
 }
 
 using Matrix4f = std::array<std::array<float, 4>, 4>;
@@ -59,6 +62,31 @@ spectacularAI::Matrix4d matrixConvert(geometry_msgs::msg::TransformStamped tf) {
     }};
 }
 
+spectacularAI::Matrix3d matrixConvert(std::array<double, 9> r) {
+    return {{
+        {r[0], r[1], r[2]},
+        {r[3], r[4], r[5]},
+        {r[6], r[7], r[8]}
+    }};
+}
+
+spectacularAI::Matrix3d getRotation(spectacularAI::Matrix4d m) {
+    return {{
+        {m[0][0], m[0][1], m[0][2]},
+        {m[1][0], m[1][1], m[1][2]},
+        {m[2][0], m[2][1], m[2][2]}
+    }};
+}
+
+spectacularAI::Matrix4d setRotation(spectacularAI::Matrix4d m, spectacularAI::Matrix3d r) {
+    return {{
+        {r[0][0], r[0][1], r[0][2], m[0][3]},
+        {r[1][0], r[1][1], r[1][2], m[1][3]},
+        {r[2][0], r[2][1], r[2][2], m[2][3]},
+        {0.0, 0.0, 0.0, 1.0}
+    }};
+}
+
 spectacularAI::Matrix4d invertSE3(spectacularAI::Matrix4d m) {
     return {{
         {m[0][0], m[1][0], m[2][0], -(m[0][0] * m[0][3] + m[1][0] * m[1][3] + m[0][0] * m[2][3]) },
@@ -77,6 +105,17 @@ std_msgs::msg::Header::Header_::_stamp_type secondsToStamp(double seconds) {
     stamp.sec = std::floor(seconds);
     stamp.nanosec = (seconds - stamp.sec) * SECONDS_TO_NANOS;
     return stamp;
+}
+
+std::string toJson(spectacularAI::Matrix3d m) {
+    std::ostringstream ss;
+    ss << std::setprecision(18);
+    ss << "[";
+    ss << "[" << m[0][0] << "," << m[0][1] << "," << m[0][2] << "],";
+    ss << "[" << m[1][0] << "," << m[1][1] << "," << m[1][2] << "],";
+    ss << "[" << m[2][0] << "," << m[2][1] << "," << m[2][2] << "]";
+    ss << "]";
+    return ss.str();
 }
 
 std::string toJson(spectacularAI::Matrix4d m) {
