@@ -13,7 +13,7 @@
  */
 class PoseHelper {
     bool intialized = false;
-    spectacularAI::Vector3d odomPosBase;
+    spectacularAI::Vector3d odomPosition;
     double lastCorrection = -1.0;
     double lastTime;
     std::string mapFrameId;
@@ -31,34 +31,31 @@ public:
 
         bool updatedCorrection = false;
 
-        spectacularAI::Vector3d pos;
         if (!intialized) {
-            pos = vioOutput->pose.position;
+            odomPosition = vioOutput->pose.position;
             intialized = true;
         } else {
             double deltaT = vioOutput->pose.time - lastTime;
-            pos = {
-                odomPosBase.x + vioOutput->velocity.x * deltaT,
-                odomPosBase.y + vioOutput->velocity.y * deltaT,
-                odomPosBase.z + vioOutput->velocity.z * deltaT
-            };
+            odomPosition.x += vioOutput->velocity.x * deltaT;
+            odomPosition.y += vioOutput->velocity.y * deltaT;
+            odomPosition.z += vioOutput->velocity.z * deltaT;
         }
         lastTime = vioOutput->pose.time;
 
         spectacularAI::Pose pose = spectacularAI::Pose {
             .time = vioOutput->pose.time,
-            .position = pos,
+            .position = odomPosition,
             .orientation = vioOutput->pose.orientation
         };
-        odomPose = poseToTransformStampped(pose, odomFrameId, baseFrameId);
+        odomPose = poseToTransformStampped(pose, mapFrameId, baseFrameId);
 
         if (vioOutput->pose.time - lastCorrection > correctionIntervalSeconds) {
-            odomPosBase = pos;
             odomCorrection = poseToTransformStampped(spectacularAI::Pose::fromMatrix(
                 vioOutput->pose.time,
                 matrixMul(vioOutput->pose.asMatrix(), invertSE3(pose.asMatrix()))
             ), mapFrameId, odomFrameId);
             updatedCorrection = true;
+            lastCorrection = vioOutput->pose.time;
         }
 
         return updatedCorrection;

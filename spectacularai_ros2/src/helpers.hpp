@@ -89,7 +89,7 @@ spectacularAI::Matrix4d setRotation(spectacularAI::Matrix4d m, spectacularAI::Ma
 
 spectacularAI::Matrix4d invertSE3(spectacularAI::Matrix4d m) {
     return {{
-        {m[0][0], m[1][0], m[2][0], -(m[0][0] * m[0][3] + m[1][0] * m[1][3] + m[0][0] * m[2][3]) },
+        {m[0][0], m[1][0], m[2][0], -(m[0][0] * m[0][3] + m[1][0] * m[1][3] + m[2][0] * m[2][3]) },
         {m[0][1], m[1][1], m[2][1], -(m[0][1] * m[0][3] + m[1][1] * m[1][3] + m[2][1] * m[2][3]) },
         {m[0][2], m[1][2], m[2][2], -(m[0][2] * m[0][3] + m[1][2] * m[1][3] + m[2][2] * m[2][3]) },
         {0,0,0,1}
