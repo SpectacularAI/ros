@@ -61,7 +61,8 @@ def launch_setup(context, *args, **kwargs):
                         {"output_on_imu_samples": False},
                         {"device_model": LaunchConfiguration('device_model').perform(context)}, # Used to fetch imu to camera transformation
                         {"imu_to_cam0": LaunchConfiguration('imu_to_cam0').perform(context)},
-                        {"imu_to_cam1": LaunchConfiguration('imu_to_cam1').perform(context)}
+                        {"imu_to_cam1": LaunchConfiguration('imu_to_cam1').perform(context)},
+                        {"separate_odom_tf": LaunchConfiguration('separate_odom_tf').perform(context) == "true"}
                     ],
                     remappings=[
                         ('input/imu', name + '/imu/data'),
@@ -93,6 +94,7 @@ def generate_launch_description():
         DeclareLaunchArgument("device_model", default_value=""),
         DeclareLaunchArgument("imu_to_cam0", default_value=""),
         DeclareLaunchArgument("imu_to_cam1", default_value=""),
+        DeclareLaunchArgument("separate_odom_tf", default_value="false"),
     ]
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]
