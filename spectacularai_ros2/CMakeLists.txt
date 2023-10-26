@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -O2")
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
 
+set(DYNAMIC_SAI_LIBRARY OFF CACHE STRING "Use dynamic Spectacular AI SDK")
+
 set(PLUGIN_SRC
   src/ros2_plugin.cpp)
 
@@ -46,6 +48,9 @@ install(
   INCLUDES DESTINATION include/
 )
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
-install(IMPORTED_RUNTIME_ARTIFACTS spectacularAI::spectacularAI)
+
+if (DYNAMIC_SAI_LIBRARY)
+  install(IMPORTED_RUNTIME_ARTIFACTS spectacularAI::spectacularAI)
+endif()
 
 ament_package()
