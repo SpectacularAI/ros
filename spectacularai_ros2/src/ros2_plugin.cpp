@@ -177,7 +177,7 @@ public:
             poseHelper = std::make_unique<PoseHelper>(1.0 / maxOdomCorrectionFreq);
         }
 
-        odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
+        // odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
         if (enableMapping) pointCloudPublisher = this->create_publisher<sensor_msgs::msg::PointCloud2>("output/pointcloud", ODOM_QUEUE_SIZE);
         if (publishPaths) {
@@ -620,7 +620,7 @@ private:
     std::unique_ptr<TrajectoryPublisher> correctedPathPublisher;
     std::unique_ptr<TrajectoryPublisher> vioPathPublisher;
 
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
+    // rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointCloudPublisher;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancyGridPublisher;
 
