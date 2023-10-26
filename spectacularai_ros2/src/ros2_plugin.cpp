@@ -132,7 +132,7 @@ namespace ros2 {
 
 class Node : public rclcpp::Node {
 public:
-    Node(const rclcpp::NodeOptions& options) : rclcpp::Node("spetacularAI", options), vioInitDone(false) {
+    Node(const rclcpp::NodeOptions& options) : rclcpp::Node("spetacularAI", options), vioInitDone(false), receivedFrames(false) {
 
         deviceModel = declareAndReadParameterString("device_model", "");
 
@@ -183,6 +183,7 @@ public:
         if (publishPaths) {
             odometryPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/odometry_path", ODOM_QUEUE_SIZE), fixedFrameId);
             correctedPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/corrected_path", ODOM_QUEUE_SIZE), fixedFrameId);
+            vioPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/vio_path", ODOM_QUEUE_SIZE), fixedFrameId);
         }
 
         if (cameraInputType == "stereo") {
@@ -264,8 +265,15 @@ private:
 
     void imuCallback(const sensor_msgs::msg::Imu &msg) {
         // RCLCPP_INFO(this->get_logger(), "Received: %s", msgToString(msg).c_str());
-        if (!vioInitDone || !vioApi) return;
         double time = stampToSeconds(msg.header.stamp);
+        if (imuStartTime < 0) {
+            imuStartTime = time;
+        } else if (!receivedFrames && time - imuStartTime > 5.0 && time - lastCameraWarning > 5.0)  {
+            RCLCPP_WARN(this->get_logger(), "Received IMU data for %f seconds, but haven't received any camera data. Are camera streams properly configured and synchronized?", time - imuStartTime);
+            lastCameraWarning = time;
+        }
+
+        if (!vioInitDone || !vioApi) return;
         if (time < previousImuTime) {
             RCLCPP_WARN(this->get_logger(), "Received IMU sample (%f) that's older than previous (%f), skipping it.", time, previousImuTime);
             return;
@@ -364,6 +372,7 @@ private:
     void stereoCameraCallback(
         const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo0, const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo1,
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1) {
+        receivedFrames = true;
 
         if (!vioInitDone) {
             spectacularAI::Matrix4d imuToCam0, imuToCam1, imuToOutput;
@@ -407,6 +416,7 @@ private:
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1,
         const sensor_msgs::msg::Image::ConstSharedPtr &depth, const depthai_ros_msgs::msg::TrackedFeatures::ConstSharedPtr &features) {
 
+        receivedFrames = true;
         //RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
 
         if (!vioInitDone) {
@@ -462,16 +472,19 @@ private:
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
             if (poseHelper) {
-                spectacularAI::Pose odomPose, odomCorrection;
+                spectacularAI::Pose odomPose;
                 if (poseHelper->computeContinousTrajectory(vioOutput, odomPose, odomCorrection)) {
                     transformBroadcaster->sendTransform(poseToTransformStampped(odomCorrection, fixedFrameId, odometryFrameId));
                 }
                 transformBroadcaster->sendTransform(poseToTransformStampped(odomPose, odometryFrameId, baseLinkFrameId));
                 if (odometryPathPublisher) odometryPathPublisher->addPose(odomPose);
+                if (correctedPathPublisher) {
+                    correctedPathPublisher->addPose(spectacularAI::Pose::fromMatrix(odomPose.time, matrixMul(odomCorrection.asMatrix(), odomPose.asMatrix())));
+                }
             } else {
                 transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, fixedFrameId, baseLinkFrameId));
             }
-            if (correctedPathPublisher) correctedPathPublisher->addPose(vioOutput->pose);
+            if (vioPathPublisher) vioPathPublisher->addPose(vioOutput->pose);
 
             // odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
@@ -605,6 +618,7 @@ private:
 
     std::unique_ptr<TrajectoryPublisher> odometryPathPublisher;
     std::unique_ptr<TrajectoryPublisher> correctedPathPublisher;
+    std::unique_ptr<TrajectoryPublisher> vioPathPublisher;
 
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointCloudPublisher;
@@ -640,6 +654,11 @@ private:
     std::vector<spectacularAI::MonocularFeature> monoFeatures;
     bool outputOnImuSamples;
     uint64_t triggerCounter = 1;
+
+    std::atomic_bool receivedFrames;
+    double imuStartTime = -1.;
+    double lastCameraWarning = -1.;
+    spectacularAI::Pose odomCorrection;
 
     // Params
     std::string fixedFrameId;
