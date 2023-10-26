@@ -204,6 +204,20 @@ geometry_msgs::msg::TransformStamped poseToTransformStampped(spectacularAI::Pose
     return tf;
 }
 
+geometry_msgs::msg::PoseStamped poseToPoseStampped(spectacularAI::Pose pose, std::string frameId) {
+    geometry_msgs::msg::PoseStamped p;
+    p.header.stamp = secondsToStamp(pose.time);
+    p.header.frame_id = frameId;
+    p.pose.position.x = pose.position.x;
+    p.pose.position.y = pose.position.y;
+    p.pose.position.z = pose.position.z;
+    p.pose.orientation.x = pose.orientation.x;
+    p.pose.orientation.y = pose.orientation.y;
+    p.pose.orientation.z = pose.orientation.z;
+    p.pose.orientation.w = pose.orientation.w;
+    return p;
+}
+
 nav_msgs::msg::Odometry outputToOdometryMsg(spectacularAI::VioOutputPtr output, std::string frameId, std::string childFrameId) {
     auto& pose = output->pose;
 

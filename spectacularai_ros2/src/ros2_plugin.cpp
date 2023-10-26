@@ -30,6 +30,7 @@
 
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
+#include "nav_msgs/msg/path.hpp"
 
 // Depth AI
 #include <depthai_ros_msgs/msg/tracked_features.hpp>
@@ -47,6 +48,8 @@ namespace {
 constexpr size_t IMU_QUEUE_SIZE = 1000;
 constexpr size_t ODOM_QUEUE_SIZE = 1000;
 constexpr uint32_t CAM_QUEUE_SIZE = 30;
+constexpr size_t TRAJECTORY_LENGTH = 1000;
+constexpr size_t UPDATE_TRAJECTORY_EVERY_NTH_POSE = 5;
 
 // Group window for camera frames, should always be smaller than time between two frames
 static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
@@ -98,6 +101,29 @@ struct RosPointWithColor {
 };
 #pragma pack(pop)
 
+class TrajectoryPublisher {
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr publisher;
+    std::deque<geometry_msgs::msg::PoseStamped> poses;
+    std::string frameId;
+    int counter = 0;
+public:
+    TrajectoryPublisher(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr publisher, std::string frameId)
+        : publisher(publisher), frameId(frameId) {}
+
+    void addPose(spectacularAI::Pose pose) {
+        poses.push_front(poseToPoseStampped(pose, frameId));
+        while (poses.size() > TRAJECTORY_LENGTH) poses.pop_back();
+        if (counter % UPDATE_TRAJECTORY_EVERY_NTH_POSE == 0) {
+            nav_msgs::msg::Path path;
+            path.header.stamp = secondsToStamp(pose.time);
+            path.header.frame_id = frameId;
+            path.poses = std::vector<geometry_msgs::msg::PoseStamped>(poses.begin(), poses.end());
+            publisher->publish(path);
+        }
+        counter++;
+    }
+};
+
 
 } // namespace
 
@@ -136,6 +162,8 @@ public:
 
         bool separateOdomTf = declareAndReadParameterBool("separate_odom_tf", false);
 
+        bool publishPaths = declareAndReadParameterBool("publish_paths", false);
+
         transformListenerBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         transformListener = std::make_shared<tf2_ros::TransformListener>(*transformListenerBuffer);
         transformBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -146,12 +174,16 @@ public:
             std::bind(&Node::imuCallback, this, std::placeholders::_1));
 
         if (separateOdomTf) {
-            poseHelper = std::make_unique<PoseHelper>(fixedFrameId, odometryFrameId, baseLinkFrameId, 1.0 / maxOdomCorrectionFreq);
+            poseHelper = std::make_unique<PoseHelper>(1.0 / maxOdomCorrectionFreq);
         }
 
         odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
         if (enableMapping) pointCloudPublisher = this->create_publisher<sensor_msgs::msg::PointCloud2>("output/pointcloud", ODOM_QUEUE_SIZE);
+        if (publishPaths) {
+            odometryPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/odometry_path", ODOM_QUEUE_SIZE), fixedFrameId);
+            correctedPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/corrected_path", ODOM_QUEUE_SIZE), fixedFrameId);
+        }
 
         if (cameraInputType == "stereo") {
             cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info", CAMERA_QOS.get_rmw_qos_profile());
@@ -430,15 +462,17 @@ private:
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
             if (poseHelper) {
-                geometry_msgs::msg::TransformStamped odomPose;
-                geometry_msgs::msg::TransformStamped odomCorrection;
+                spectacularAI::Pose odomPose, odomCorrection;
                 if (poseHelper->computeContinousTrajectory(vioOutput, odomPose, odomCorrection)) {
-                    transformBroadcaster->sendTransform(odomCorrection);
+                    transformBroadcaster->sendTransform(poseToTransformStampped(odomCorrection, fixedFrameId, odometryFrameId));
                 }
-                transformBroadcaster->sendTransform(odomPose);
+                transformBroadcaster->sendTransform(poseToTransformStampped(odomPose, odometryFrameId, baseLinkFrameId));
+                if (odometryPathPublisher) odometryPathPublisher->addPose(odomPose);
             } else {
                 transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, fixedFrameId, baseLinkFrameId));
             }
+            if (correctedPathPublisher) correctedPathPublisher->addPose(vioOutput->pose);
+
             // odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
         }
@@ -568,6 +602,9 @@ private:
         vioApi->setOutputCallback(std::bind(&Node::vioOutputCallback, this, std::placeholders::_1));
         vioInitDone = true;
     }
+
+    std::unique_ptr<TrajectoryPublisher> odometryPathPublisher;
+    std::unique_ptr<TrajectoryPublisher> correctedPathPublisher;
 
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointCloudPublisher;
