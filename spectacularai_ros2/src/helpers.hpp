@@ -251,3 +251,110 @@ nav_msgs::msg::Odometry outputToOdometryMsg(spectacularAI::VioOutputPtr output, 
 
     return odom;
 }
+
+std::string rosToSaiDistortionModel(std::string distortion_model) {
+    // Spectacular AI supported models pass through
+    if (distortion_model == "brown-conrady"
+        || distortion_model == "pinhole"
+        || distortion_model == "kannala-brandt4"
+        || distortion_model == "kannala-brandt18"
+        || distortion_model == "omnidir") return distortion_model;
+    // Match ROS names to SAI names
+    if (distortion_model == "plumb_bob") return "unknown"; // TODO: Is this also brown-conrady with fewer params?
+    if (distortion_model == "rational_polynomial") return "brown-conrady";
+    if (distortion_model == "equidistant") return "unknown";
+    // Unsupported model
+    std::cerr <<  "Unsupported camera model: " << distortion_model << std::endl;
+    return "unknown";
+}
+
+bool rosEncodingToColorFormat(const std::string encoding, spectacularAI::ColorFormat &colorFormat) {
+    colorFormat = spectacularAI::ColorFormat::NONE;
+    if (encoding == sensor_msgs::image_encodings::RGB8) {
+        colorFormat = spectacularAI::ColorFormat::RGB;
+    } else if (encoding == sensor_msgs::image_encodings::BGR8) {
+        colorFormat = spectacularAI::ColorFormat::BGR;
+    } else if (encoding == sensor_msgs::image_encodings::RGBA8) {
+        colorFormat = spectacularAI::ColorFormat::RGBA;
+    } else if (encoding == sensor_msgs::image_encodings::BGRA8) {
+        colorFormat = spectacularAI::ColorFormat::BGRA;
+    } else if (encoding == sensor_msgs::image_encodings::MONO8) {
+        colorFormat = spectacularAI::ColorFormat::GRAY;
+    } else if (encoding == sensor_msgs::image_encodings::MONO16 || encoding == sensor_msgs::image_encodings::TYPE_16UC1) {
+        colorFormat = spectacularAI::ColorFormat::GRAY16;
+    }
+    return colorFormat != spectacularAI::ColorFormat::NONE;
+}
+
+bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<spectacularAI::Matrix4d> extrinsics,
+    const spectacularAI::Matrix4d imuToOutput, bool isRectified, std::string &calibrationJson) {
+    // https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg
+    std::ostringstream calib;
+    calib << std::setprecision(18);
+    calib << "{";
+    calib << "\"imuToOutput\":" << toJson(imuToOutput) << ",";
+    calib << "\"cameras\": [";
+    for (size_t i = 0; i < intrinsics.size(); i++) {
+        auto& intr = intrinsics[i];
+
+        spectacularAI::Matrix4d imuToCam = extrinsics[i];
+
+        std::string model = rosToSaiDistortionModel(intr->distortion_model);
+        double fx, fy, px, py;
+
+        if (isRectified) {
+            // Projection/camera matrix
+            //     [fx'  0  cx' Tx]
+            // P = [ 0  fy' cy' Ty]
+            //     [ 0   0   1   0]
+            fx = intr->p[0];
+            fy = intr->p[5];
+            px = intr->p[2];
+            py = intr->p[6];
+
+            // Apply rectification rotation to imuToCamera matrix
+            auto R = matrixConvert(intr->r);
+            if (R[0][0] == 1 && R[1][1] == 1 && R[2][2] == 1 ) {
+                std::cerr << "Rectification rotation is identity, this is likely incorrect " << toJson(R) << std::endl;
+            }
+            imuToCam = setRotation(imuToCam, matrixMul(R, getRotation(imuToCam)));
+
+            model = "pinhole";
+        } else {
+            // Intrinsic camera matrix for the raw (distorted) images.
+            //     [fx  0 cx]
+            // K = [ 0 fy cy]
+            //     [ 0  0  1]
+            fx = intr->k[0];
+            fy = intr->k[4];
+            px = intr->k[2];
+            py = intr->k[5];
+        }
+
+        if (model == "unknown") return false;
+
+        calib << "{";
+        calib << "\"focalLengthX\":" << fx << ",";
+        calib << "\"focalLengthY\":" << fy << ",";
+        calib << "\"principalPointX\":" << px << ",";
+        calib << "\"principalPointY\":" << py << ",";
+        calib << "\"imageHeight\":" << intr->height << ",";
+        calib << "\"imageWidth\":" << intr->width << ",";
+        calib << "\"imuToCamera\": " << toJson(imuToCam) << ",";
+        if (model != "pinhole") {
+            calib << "\"distortionCoefficients\": [";
+            for (size_t j = 0; j < intr->d.size(); j++) {
+                calib << intr->d[j];
+                if (j + 1 != intr->d.size()) calib << ",";
+            }
+            calib << "],";
+        }
+        calib << "\"model\": \"" << model << "\"";
+        calib << "}";
+        if (i + 1 != intrinsics.size()) calib << ",";
+    }
+    calib << "]}";
+    calibrationJson = calib.str();
+    // RCLCPP_WARN(this->get_logger(), "%s", calibrationJson.c_str());
+    return true;
+}
