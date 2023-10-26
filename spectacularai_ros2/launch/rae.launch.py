@@ -46,12 +46,15 @@ def launch_setup(context, *args, **kwargs):
                         # Camera extrinsics
                         {"cam0_optical_frame_id": name + "_right_camera_optical_frame"},
                         {"cam1_optical_frame_id": name + "_left_camera_optical_frame"},
+                        {"base_link_frame_id": LaunchConfiguration('parent_frame').perform(context)},
                         {"depth_scale": 1.0/1000.0}, # Depth map values are multiplied with this to get distance in meters
                         {"camera_input_type": "stereo_depth_features"},
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
                         {"enable_mapping": True},
                         {"enable_occupancy_grid": True},
-                        {"device_model": "rae"} # Used to fetch imu to camera transformation
+                        {"output_on_imu_samples": True},
+                        {"separate_odom_tf": True},
+                        {"device_model": "RAE"} # Used to fetch imu to camera transformation
                     ],
                     remappings=[
                         ('input/imu', name + '/imu/data'),

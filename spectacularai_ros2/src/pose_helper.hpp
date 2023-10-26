@@ -6,59 +6,49 @@
 // Spectacular AI
 #include <spectacularAI/vio.hpp>
 
-#include "helpers.hpp"
-
 /**
  * Helper to form smooth odometry output trajectory
  */
 class PoseHelper {
     bool intialized = false;
-    spectacularAI::Vector3d odomPosBase;
+    spectacularAI::Vector3d odomPosition;
     double lastCorrection = -1.0;
     double lastTime;
-    std::string mapFrameId;
-    std::string odomFrameId;
-    std::string baseFrameId;
     double correctionIntervalSeconds;
 
 public:
-    PoseHelper(std::string mapFrameId, std::string odomFrameId, std::string baseFrameId, double correctionIntervalSeconds)
-        : mapFrameId(mapFrameId), odomFrameId(odomFrameId), baseFrameId(baseFrameId), correctionIntervalSeconds(correctionIntervalSeconds) {}
+    PoseHelper(double correctionIntervalSeconds) : correctionIntervalSeconds(correctionIntervalSeconds) {}
 
     bool computeContinousTrajectory(spectacularAI::VioOutputPtr vioOutput,
-        geometry_msgs::msg::TransformStamped &odomPose,
-        geometry_msgs::msg::TransformStamped &odomCorrection) {
+        spectacularAI::Pose &odomPose,
+        spectacularAI::Pose &odomCorrection) {
 
         bool updatedCorrection = false;
 
-        spectacularAI::Vector3d pos;
         if (!intialized) {
-            pos = vioOutput->pose.position;
+            odomPosition = vioOutput->pose.position;
             intialized = true;
         } else {
             double deltaT = vioOutput->pose.time - lastTime;
-            pos = {
-                odomPosBase.x + vioOutput->velocity.x * deltaT,
-                odomPosBase.y + vioOutput->velocity.y * deltaT,
-                odomPosBase.z + vioOutput->velocity.z * deltaT
-            };
+            odomPosition.x += vioOutput->velocity.x * deltaT;
+            odomPosition.y += vioOutput->velocity.y * deltaT;
+            odomPosition.z += vioOutput->velocity.z * deltaT;
         }
         lastTime = vioOutput->pose.time;
 
-        spectacularAI::Pose pose = spectacularAI::Pose {
+        odomPose = spectacularAI::Pose {
             .time = vioOutput->pose.time,
-            .position = pos,
+            .position = odomPosition,
             .orientation = vioOutput->pose.orientation
         };
-        odomPose = poseToTransformStampped(pose, odomFrameId, baseFrameId);
 
         if (vioOutput->pose.time - lastCorrection > correctionIntervalSeconds) {
-            odomPosBase = pos;
-            odomCorrection = poseToTransformStampped(spectacularAI::Pose::fromMatrix(
+            odomCorrection = spectacularAI::Pose::fromMatrix(
                 vioOutput->pose.time,
-                matrixMul(vioOutput->pose.asMatrix(), invertSE3(pose.asMatrix()))
-            ), mapFrameId, odomFrameId);
+                matrixMul(vioOutput->pose.asMatrix(), invertSE3(odomPose.asMatrix()))
+            );
             updatedCorrection = true;
+            lastCorrection = vioOutput->pose.time;
         }
 
         return updatedCorrection;

@@ -30,6 +30,7 @@
 
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
+#include "nav_msgs/msg/path.hpp"
 
 // Depth AI
 #include <depthai_ros_msgs/msg/tracked_features.hpp>
@@ -47,6 +48,8 @@ namespace {
 constexpr size_t IMU_QUEUE_SIZE = 1000;
 constexpr size_t ODOM_QUEUE_SIZE = 1000;
 constexpr uint32_t CAM_QUEUE_SIZE = 30;
+constexpr size_t TRAJECTORY_LENGTH = 1000;
+constexpr size_t UPDATE_TRAJECTORY_EVERY_NTH_POSE = 5;
 
 // Group window for camera frames, should always be smaller than time between two frames
 static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e6);
@@ -98,6 +101,29 @@ struct RosPointWithColor {
 };
 #pragma pack(pop)
 
+class TrajectoryPublisher {
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr publisher;
+    std::deque<geometry_msgs::msg::PoseStamped> poses;
+    std::string frameId;
+    int counter = 0;
+public:
+    TrajectoryPublisher(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr publisher, std::string frameId)
+        : publisher(publisher), frameId(frameId) {}
+
+    void addPose(spectacularAI::Pose pose) {
+        poses.push_front(poseToPoseStampped(pose, frameId));
+        while (poses.size() > TRAJECTORY_LENGTH) poses.pop_back();
+        if (counter % UPDATE_TRAJECTORY_EVERY_NTH_POSE == 0) {
+            nav_msgs::msg::Path path;
+            path.header.stamp = secondsToStamp(pose.time);
+            path.header.frame_id = frameId;
+            path.poses = std::vector<geometry_msgs::msg::PoseStamped>(poses.begin(), poses.end());
+            publisher->publish(path);
+        }
+        counter++;
+    }
+};
+
 
 } // namespace
 
@@ -106,7 +132,7 @@ namespace ros2 {
 
 class Node : public rclcpp::Node {
 public:
-    Node(const rclcpp::NodeOptions& options) : rclcpp::Node("spetacularAI", options), vioInitDone(false) {
+    Node(const rclcpp::NodeOptions& options) : rclcpp::Node("spetacularAI", options), vioInitDone(false), receivedFrames(false) {
 
         deviceModel = declareAndReadParameterString("device_model", "");
 
@@ -136,6 +162,8 @@ public:
 
         bool separateOdomTf = declareAndReadParameterBool("separate_odom_tf", false);
 
+        bool publishPaths = declareAndReadParameterBool("publish_paths", false);
+
         transformListenerBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         transformListener = std::make_shared<tf2_ros::TransformListener>(*transformListenerBuffer);
         transformBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -146,12 +174,17 @@ public:
             std::bind(&Node::imuCallback, this, std::placeholders::_1));
 
         if (separateOdomTf) {
-            poseHelper = std::make_unique<PoseHelper>(fixedFrameId, odometryFrameId, baseLinkFrameId, 1.0 / maxOdomCorrectionFreq);
+            poseHelper = std::make_unique<PoseHelper>(1.0 / maxOdomCorrectionFreq);
         }
 
-        odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
+        // odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
         if (enableMapping) pointCloudPublisher = this->create_publisher<sensor_msgs::msg::PointCloud2>("output/pointcloud", ODOM_QUEUE_SIZE);
+        if (publishPaths) {
+            odometryPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/odometry_path", ODOM_QUEUE_SIZE), fixedFrameId);
+            correctedPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/corrected_path", ODOM_QUEUE_SIZE), fixedFrameId);
+            vioPathPublisher = std::make_unique<TrajectoryPublisher>(this->create_publisher<nav_msgs::msg::Path>("output/vio_path", ODOM_QUEUE_SIZE), fixedFrameId);
+        }
 
         if (cameraInputType == "stereo") {
             cameraInfo0Subscription.subscribe(this, "/input/cam0/camera_info", CAMERA_QOS.get_rmw_qos_profile());
@@ -215,113 +248,6 @@ private:
         return oss.str();
     }
 
-    std::string rosToSaiDistortionModel(std::string distortion_model) {
-        // Spectacular AI supported models pass through
-        if (distortion_model == "brown-conrady"
-            || distortion_model == "pinhole"
-            || distortion_model == "kannala-brandt4"
-            || distortion_model == "kannala-brandt18"
-            || distortion_model == "omnidir") return distortion_model;
-        // Match ROS names to SAI names
-        if (distortion_model == "plumb_bob") return "unknown"; // TODO: Is this also brown-conrady with fewer params?
-        if (distortion_model == "rational_polynomial") return "brown-conrady";
-        if (distortion_model == "equidistant") return "unknown";
-        // Unsupported model
-        RCLCPP_WARN(this->get_logger(), "Unsupported camera model: %s", distortion_model.c_str());
-        return "unknown";
-    }
-
-    bool cameraInfoToCalibrationJson(const std::vector<sensor_msgs::msg::CameraInfo::ConstSharedPtr> intrinsics, const std::vector<spectacularAI::Matrix4d> extrinsics,
-        const spectacularAI::Matrix4d imuToOutput, bool isRectified, std::string &calibrationJson) {
-        // https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg
-        std::ostringstream calib;
-        calib << std::setprecision(18);
-        calib << "{";
-        calib << "\"imuToOutput\":" << toJson(imuToOutput) << ",";
-        calib << "\"cameras\": [";
-        for (size_t i = 0; i < intrinsics.size(); i++) {
-            auto& intr = intrinsics[i];
-
-            spectacularAI::Matrix4d imuToCam = extrinsics[i];
-
-            std::string model = rosToSaiDistortionModel(intr->distortion_model);
-            double fx, fy, px, py;
-
-            if (isRectified) {
-                // Projection/camera matrix
-                //     [fx'  0  cx' Tx]
-                // P = [ 0  fy' cy' Ty]
-                //     [ 0   0   1   0]
-                fx = intr->p[0];
-                fy = intr->p[5];
-                px = intr->p[2];
-                py = intr->p[6];
-
-                // Apply rectification rotation to imuToCamera matrix
-                auto R = matrixConvert(intr->r);
-                if (R[0][0] == 1 && R[1][1] == 1 && R[2][2] == 1 ) {
-                    RCLCPP_WARN(this->get_logger(), "Rectification rotation is identity, this is likely incorrect %s", toJson(R).c_str());
-                }
-                imuToCam = setRotation(imuToCam, matrixMul(R, getRotation(imuToCam)));
-
-                model = "pinhole";
-            } else {
-                // Intrinsic camera matrix for the raw (distorted) images.
-                //     [fx  0 cx]
-                // K = [ 0 fy cy]
-                //     [ 0  0  1]
-                fx = intr->k[0];
-                fy = intr->k[4];
-                px = intr->k[2];
-                py = intr->k[5];
-            }
-
-            if (model == "unknown") return false;
-
-            calib << "{";
-            calib << "\"focalLengthX\":" << fx << ",";
-            calib << "\"focalLengthY\":" << fy << ",";
-            calib << "\"principalPointX\":" << px << ",";
-            calib << "\"principalPointY\":" << py << ",";
-            calib << "\"imageHeight\":" << intr->height << ",";
-            calib << "\"imageWidth\":" << intr->width << ",";
-            calib << "\"imuToCamera\": " << toJson(imuToCam) << ",";
-            if (model != "pinhole") {
-                calib << "\"distortionCoefficients\": [";
-                for (size_t j = 0; j < intr->d.size(); j++) {
-                    calib << intr->d[j];
-                    if (j + 1 != intr->d.size()) calib << ",";
-                }
-                calib << "],";
-            }
-            calib << "\"model\": \"" << model << "\"";
-            calib << "}";
-            if (i + 1 != intrinsics.size()) calib << ",";
-        }
-        calib << "]}";
-        calibrationJson = calib.str();
-        // RCLCPP_WARN(this->get_logger(), "%s", calibrationJson.c_str());
-        return true;
-    }
-
-    bool rosEncodingToColorFormat(const std::string encoding, spectacularAI::ColorFormat &colorFormat) {
-        colorFormat = spectacularAI::ColorFormat::NONE;
-        if (encoding == sensor_msgs::image_encodings::RGB8) {
-            colorFormat = spectacularAI::ColorFormat::RGB;
-        } else if (encoding == sensor_msgs::image_encodings::BGR8) {
-            colorFormat = spectacularAI::ColorFormat::BGR;
-        } else if (encoding == sensor_msgs::image_encodings::RGBA8) {
-            colorFormat = spectacularAI::ColorFormat::RGBA;
-        } else if (encoding == sensor_msgs::image_encodings::BGRA8) {
-            colorFormat = spectacularAI::ColorFormat::BGRA;
-        } else if (encoding == sensor_msgs::image_encodings::MONO8) {
-            colorFormat = spectacularAI::ColorFormat::GRAY;
-        } else if (encoding == sensor_msgs::image_encodings::MONO16 || encoding == sensor_msgs::image_encodings::TYPE_16UC1) {
-            colorFormat = spectacularAI::ColorFormat::GRAY16;
-        }
-        return colorFormat != spectacularAI::ColorFormat::NONE;
-    }
-
     std::string declareAndReadParameterString(std::string name, std::string defaultValue) {
         this->declare_parameter<std::string>(name, defaultValue);
         return this->get_parameter(name).as_string();
@@ -339,8 +265,15 @@ private:
 
     void imuCallback(const sensor_msgs::msg::Imu &msg) {
         // RCLCPP_INFO(this->get_logger(), "Received: %s", msgToString(msg).c_str());
-        if (!vioInitDone || !vioApi) return;
         double time = stampToSeconds(msg.header.stamp);
+        if (imuStartTime < 0) {
+            imuStartTime = time;
+        } else if (!receivedFrames && time - imuStartTime > 5.0 && time - lastCameraWarning > 5.0)  {
+            RCLCPP_WARN(this->get_logger(), "Received IMU data for %f seconds, but haven't received any camera data. Are camera streams properly configured and synchronized?", time - imuStartTime);
+            lastCameraWarning = time;
+        }
+
+        if (!vioInitDone || !vioApi) return;
         if (time < previousImuTime) {
             RCLCPP_WARN(this->get_logger(), "Received IMU sample (%f) that's older than previous (%f), skipping it.", time, previousImuTime);
             return;
@@ -439,6 +372,7 @@ private:
     void stereoCameraCallback(
         const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo0, const sensor_msgs::msg::CameraInfo::ConstSharedPtr &camInfo1,
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1) {
+        receivedFrames = true;
 
         if (!vioInitDone) {
             spectacularAI::Matrix4d imuToCam0, imuToCam1, imuToOutput;
@@ -482,6 +416,7 @@ private:
         const sensor_msgs::msg::Image::ConstSharedPtr &img0, const sensor_msgs::msg::Image::ConstSharedPtr &img1,
         const sensor_msgs::msg::Image::ConstSharedPtr &depth, const depthai_ros_msgs::msg::TrackedFeatures::ConstSharedPtr &features) {
 
+        receivedFrames = true;
         //RCLCPP_INFO(this->get_logger(), "Received all data: %f", stampToSeconds(img0->header.stamp));
 
         if (!vioInitDone) {
@@ -537,15 +472,20 @@ private:
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
             if (poseHelper) {
-                geometry_msgs::msg::TransformStamped odomPose;
-                geometry_msgs::msg::TransformStamped odomCorrection;
+                spectacularAI::Pose odomPose;
                 if (poseHelper->computeContinousTrajectory(vioOutput, odomPose, odomCorrection)) {
-                    transformBroadcaster->sendTransform(odomCorrection);
+                    transformBroadcaster->sendTransform(poseToTransformStampped(odomCorrection, fixedFrameId, odometryFrameId));
                 }
-                transformBroadcaster->sendTransform(odomPose);
+                transformBroadcaster->sendTransform(poseToTransformStampped(odomPose, odometryFrameId, baseLinkFrameId));
+                if (odometryPathPublisher) odometryPathPublisher->addPose(odomPose);
+                if (correctedPathPublisher) {
+                    correctedPathPublisher->addPose(spectacularAI::Pose::fromMatrix(odomPose.time, matrixMul(odomCorrection.asMatrix(), odomPose.asMatrix())));
+                }
             } else {
                 transformBroadcaster->sendTransform(poseToTransformStampped(vioOutput->pose, fixedFrameId, baseLinkFrameId));
             }
+            if (vioPathPublisher) vioPathPublisher->addPose(vioOutput->pose);
+
             // odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
         }
@@ -676,7 +616,11 @@ private:
         vioInitDone = true;
     }
 
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
+    std::unique_ptr<TrajectoryPublisher> odometryPathPublisher;
+    std::unique_ptr<TrajectoryPublisher> correctedPathPublisher;
+    std::unique_ptr<TrajectoryPublisher> vioPathPublisher;
+
+    // rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointCloudPublisher;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancyGridPublisher;
 
@@ -710,6 +654,11 @@ private:
     std::vector<spectacularAI::MonocularFeature> monoFeatures;
     bool outputOnImuSamples;
     uint64_t triggerCounter = 1;
+
+    std::atomic_bool receivedFrames;
+    double imuStartTime = -1.;
+    double lastCameraWarning = -1.;
+    spectacularAI::Pose odomCorrection;
 
     // Params
     std::string fixedFrameId;
