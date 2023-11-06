@@ -56,6 +56,7 @@ def launch_setup(context, *args, **kwargs):
                         {"depth_scale": 1.0/1000.0}, # Depth map values are multiplied with this to get distance in meters
                         {"camera_input_type": LaunchConfiguration('camera_input_type').perform(context)},
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
+                        {"recording_only": LaunchConfiguration('recording_only').perform(context) == "true"},
                         {"enable_mapping": True},
                         {"enable_occupancy_grid": True},
                         {"output_on_imu_samples": False},
@@ -88,6 +89,7 @@ def generate_launch_description():
         DeclareLaunchArgument("name", default_value="oak"),
         DeclareLaunchArgument("use_rviz", default_value='false'),
         DeclareLaunchArgument("recording_folder", default_value=""),
+        DeclareLaunchArgument("recording_only", default_value="false"),
         DeclareLaunchArgument("parent_frame", default_value="oak-d-base-frame"),
         DeclareLaunchArgument("params_file", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.yaml')),
         DeclareLaunchArgument("rviz_config", default_value=os.path.join(spectacular_prefix, 'launch', 'oak_d.rviz')),

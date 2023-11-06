@@ -56,6 +56,7 @@ static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e
 
 // https://docs.ros.org/en/humble/Concepts/Intermediate/About-Quality-of-Service-Settings.html
 static const rclcpp::QoS CAMERA_QOS = rclcpp::QoS(rclcpp::KeepLast(CAM_QUEUE_SIZE)).best_effort().durability_volatile();
+static const rclcpp::QoS IMU_QOS = rclcpp::QoS(rclcpp::KeepLast(IMU_QUEUE_SIZE)).best_effort().durability_volatile();
 
 const char *oakYaml =
 R"(# set: wrapper-base
@@ -153,6 +154,7 @@ public:
         cameraInputType = declareAndReadParameterString("camera_input_type", "stereo_depth_features");
 
         outputOnImuSamples = declareAndReadParameterBool("output_on_imu_samples", false);
+        recordingOnly = declareAndReadParameterBool("recording_only", false);
 
         maxOdomFreq = declareAndReadParameterDouble("max_odom_freq", 100);
         maxOdomCorrectionFreq = declareAndReadParameterDouble("max_odom_correction_freq", 10);
@@ -168,9 +170,7 @@ public:
         transformListener = std::make_shared<tf2_ros::TransformListener>(*transformListenerBuffer);
         transformBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-        imuSubscription = this->create_subscription<sensor_msgs::msg::Imu>(
-            "input/imu",
-            IMU_QUEUE_SIZE,
+        imuSubscription = this->create_subscription<sensor_msgs::msg::Imu>("input/imu", IMU_QOS,
             std::bind(&Node::imuCallback, this, std::placeholders::_1));
 
         if (separateOdomTf) {
@@ -609,7 +609,10 @@ private:
         spectacularAI::Vio::Builder vioBuilder = spectacularAI::Vio::builder();
         vioBuilder.setCalibrationJSON(calibrationJson);
         vioBuilder.setConfigurationYAML(config);
-        if (!recordingFolder.empty()) vioBuilder.setRecordingFolder(recordingFolder);
+        if (!recordingFolder.empty()) {
+            vioBuilder.setRecordingFolder(recordingFolder);
+            vioBuilder.setRecordingOnly(recordingOnly);
+        }
         if (enableMapping) vioBuilder.setMapperCallback(std::bind(&Node::mappingOutputCallback, this, std::placeholders::_1));
         vioApi = vioBuilder.build();
         vioApi->setOutputCallback(std::bind(&Node::vioOutputCallback, this, std::placeholders::_1));
@@ -653,6 +656,7 @@ private:
     int64_t latestKeyFrame = -1;
     std::vector<spectacularAI::MonocularFeature> monoFeatures;
     bool outputOnImuSamples;
+    bool recordingOnly;
     uint64_t triggerCounter = 1;
 
     std::atomic_bool receivedFrames;
