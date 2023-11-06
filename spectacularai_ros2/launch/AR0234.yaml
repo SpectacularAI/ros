@@ -1,0 +1,35 @@
+/oak:
+  ros__parameters:
+    camera:
+      i_enable_imu: true
+      i_enable_ir: false
+      i_floodlight_brightness: 0
+      i_pipeline_type: depth
+      i_usb_speed: SUPER_PLUS
+      i_nn_type: none
+      i_publish_tf_from_calibration: True
+    imu:
+      i_max_q_size: 1000
+      i_acc_freq: 400
+      i_batch_report_threshold: 5
+      i_enable_rotation: false
+      i_gyro_freq: 400
+      i_max_batch_reports: 5
+      i_message_type: IMU
+      i_sync_method: COPY
+    left:
+      i_publish_topic: false
+      i_width: 1280
+      i_height: 800
+      i_fps: 20.0
+    right:
+      i_publish_topic: false
+      i_width: 1280
+      i_height: 800
+      i_fps: 20.0
+    stereo:
+      i_align_depth: true
+      i_board_socket_id: 2
+      i_subpixel: true
+      i_publish_synced_rect_pair: true
+      i_right_rect_enable_feature_tracker: true
