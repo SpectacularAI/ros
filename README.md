@@ -16,8 +16,8 @@ Extract Spectacular AI SDK somewhere, for example `spectacularAI/` and optionall
 
 From this repository root, assuming `x86-64` architecture and SDK in `spectacularAI/`:
 ```bash
-scripts/build_all.sh -DspectacularAI_DIR=../spectacularAI/Linux_Ubuntu_x86-64/lib/cmake/spectacularAI
-# OR alternatively, with a static SDK variant
+scripts/build_all.sh -DspectacularAI_DIR=../spectacularAI/Linux_Ubuntu_x86-64/lib/cmake/spectacularAI -DDYNAMIC_SAI_LIBRARY=ON
+# OR alternatively, with a static SDK variant, with -DDYNAMIC_SAI_LIBRARY=OFF
 # ./scripts/build_all_static.sh /PATH/TO/spectacularAI_*_static.tar.gz
 ```
 
