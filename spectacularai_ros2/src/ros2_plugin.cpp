@@ -58,30 +58,6 @@ static const rclcpp::Duration CAMERA_SYNC_INTERVAL = rclcpp::Duration(0, 10 * 1e
 static const rclcpp::QoS CAMERA_QOS = rclcpp::QoS(rclcpp::KeepLast(CAM_QUEUE_SIZE)).best_effort().durability_volatile();
 static const rclcpp::QoS IMU_QOS = rclcpp::QoS(rclcpp::KeepLast(IMU_QUEUE_SIZE)).best_effort().durability_volatile();
 
-const char *oakYaml =
-R"(# set: wrapper-base
-trackChiTestOutlierR: 3
-trackOutlierThresholdGrowthFactor: 1.3
-hybridMapSize: 2
-sampleSyncLag: 1
-trackingStatusInitMinSeconds: 0.5
-cameraTrailLength: 12
-cameraTrailHanoiLength: 8
-delayFrames: 2
-maxSlamResultQueueSize: 2
-# set: oak-d
-imuAnomalyFilterGyroEnabled: true
-imuStationaryEnabled: true
-visualR: 0.01
-skipFirstNFrames: 10
-# set: live
-noWaitingForResults: true
-# custom
-useSlam: True
-ffmpegVideoCodec: "libx264 -crf 15 -preset ultrafast"
-)";
-
-
 using StereoCameraPolicy = message_filters::sync_policies::ApproximateTime<
         sensor_msgs::msg::CameraInfo, sensor_msgs::msg::CameraInfo,
         sensor_msgs::msg::Image, sensor_msgs::msg::Image>;
@@ -221,14 +197,23 @@ public:
 private:
     std::string createConfigYaml() {
         std::ostringstream oss;
-        oss << oakYaml;
+        const bool isRae = stringStartsWith(deviceModel, "RAE") || stringStartsWith(deviceModel, "rae");
+
+        if (isRae) {
+            oss << "parameterSets: [\"wrapper-base\", \"live\", \"rae\"]\n";
+        }
+        else {
+            oss << "parameterSets: [\"wrapper-base\", \"live\", \"oak-d\"]\n";
+        }
         oss << "alreadyRectified: True\n";
+        oss << "useSlam: True\n";
+        oss << "ffmpegVideoCodec: \"libx264 -crf 15 -preset ultrafast\"\n";
 
         bool useFeatureTracker = cameraInputType == "stereo_depth_features";
 
         if (useFeatureTracker) {
             // Not good with non-depth grayscale video inputs.
-            oss << "depthErrorScale: 0.1\n";
+            if (!isRae) oss << "depthErrorScale: 0.1\n";
             oss << "keyframeCandidateInterval: 0\n";
         } else {
             oss << "keyframeCandidateInterval: 6\n";
