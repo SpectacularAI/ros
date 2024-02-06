@@ -2,9 +2,10 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction,ExecuteProcess, RegisterEventHandler, TimerAction, LogInfo
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch.event_handlers import OnProcessStart
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch.conditions import IfCondition
 from launch_ros.descriptions import ComposableNode
@@ -14,13 +15,11 @@ def launch_setup(context, *args, **kwargs):
 
     params_file = LaunchConfiguration("params_file")
     name = LaunchConfiguration('name').perform(context)
-    return [
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(get_package_share_directory('rae_description'), 'launch', 'rsp.launch.py')),
-            launch_arguments={'sim': 'false'}.items()
-        ),
-        ComposableNodeContainer(
+    reset_pwm = ExecuteProcess(
+        cmd=[['busybox devmem 0x20320180 32 0x00000000']],
+        shell=True
+    )
+    sai_slam = ComposableNodeContainer(
             name=name+"_container",
             namespace="",
             package="rclcpp_components",
@@ -70,6 +69,24 @@ def launch_setup(context, *args, **kwargs):
             arguments=['--ros-args', '--log-level', 'info'],
             output="both",
         )
+    return [
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(get_package_share_directory('rae_description'), 'launch', 'rsp.launch.py')),
+            launch_arguments={'sim': 'false'}.items()
+        ),
+        sai_slam,
+        RegisterEventHandler(
+            OnProcessStart(
+                target_action=sai_slam,
+                on_start=[
+                    TimerAction(
+                        period=15.0,
+                        actions=[reset_pwm, LogInfo(msg='Resetting PWM.'),],
+                    )
+                ]
+            )
+        ),
     ]
 
 
@@ -85,6 +102,7 @@ def generate_launch_description():
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]
     )
+
 
 
 

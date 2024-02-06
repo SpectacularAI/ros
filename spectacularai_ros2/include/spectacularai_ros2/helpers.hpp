@@ -197,8 +197,8 @@ geometry_msgs::msg::TransformStamped poseToTransformStampped(spectacularAI::Pose
     tf.transform.translation.x = pose.position.x;
     tf.transform.translation.y = pose.position.y;
     tf.transform.translation.z = pose.position.z;
-    tf.transform.rotation.x = pose.orientation.x;
-    tf.transform.rotation.y = pose.orientation.y;
+    tf.transform.rotation.x = 0;
+    tf.transform.rotation.y = 0;
     tf.transform.rotation.z = pose.orientation.z;
     tf.transform.rotation.w = pose.orientation.w;
     return tf;
