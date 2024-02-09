@@ -17,7 +17,7 @@ make PREFIX="$TMP/install" test
 make install
 
 cd "$ROOT"
-./scripts/build_all.sh -DspectacularAI_DIR="$TMP/install/lib/cmake/spectacularAI"
+sudo ./scripts/build_all.sh -DspectacularAI_DIR="$TMP/install/lib/cmake/spectacularAI"
 
 INSTALL_DIR="spectacularai_ros2/install/spectacularai_ros2/"
 # Strip the executable (just in case the CMake build failed to do that)
