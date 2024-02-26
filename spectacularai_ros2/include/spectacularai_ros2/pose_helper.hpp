@@ -32,10 +32,10 @@ public:
             double deltaT = vioOutput->pose.time - lastTime;
             odomPosition.x += vioOutput->velocity.x * deltaT;
             odomPosition.y += vioOutput->velocity.y * deltaT;
-            odomPosition.z += vioOutput->velocity.z * deltaT;
+            odomPosition.z = 0;
         }
         lastTime = vioOutput->pose.time;
-
+        
         odomPose = spectacularAI::Pose {
             .time = vioOutput->pose.time,
             .position = odomPosition,
