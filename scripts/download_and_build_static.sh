@@ -30,7 +30,7 @@ cd ..
 # Build ROS node
 
 . /opt/ros/${ROS_DISTRO}/setup.sh
-. $DEPTHAI_WS/install/setup.sh
+# . $DEPTHAI_WS/install/setup.sh
 ./scripts/build_all_static.sh sai_sdk/spectacularAI_*_static_rae.tar.gz
 
 # Remove temp files
