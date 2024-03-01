@@ -51,7 +51,6 @@ def launch_setup(context, *args, **kwargs):
                         {"recording_folder": LaunchConfiguration('recording_folder').perform(context)},
                         {"enable_mapping": True},
                         {"enable_occupancy_grid": True},
-                        {"output_on_imu_samples": True},
                         {"separate_odom_tf": True},
                         {"device_model": "RAE"} # Used to fetch imu to camera transformation
                     ],

@@ -129,7 +129,6 @@ public:
         enableOccupancyGrid = declareAndReadParameterBool("enable_occupancy_grid", false);
         cameraInputType = declareAndReadParameterString("camera_input_type", "stereo_depth_features");
 
-        outputOnImuSamples = declareAndReadParameterBool("output_on_imu_samples", false);
         recordingOnly = declareAndReadParameterBool("recording_only", false);
 
         maxOdomFreq = declareAndReadParameterDouble("max_odom_freq", 100);
@@ -200,7 +199,7 @@ private:
         const bool isRae = stringStartsWith(deviceModel, "RAE") || stringStartsWith(deviceModel, "rae");
 
         if (isRae) {
-            oss << "parameterSets: [\"wrapper-base\", \"live\", \"rae\"]\n";
+            oss << "parameterSets: [\"wrapper-base\", \"live\", \"rae\", \"low-latency\"]\n";
         }
         else {
             oss << "parameterSets: [\"wrapper-base\", \"live\", \"oak-d\"]\n";
@@ -224,10 +223,6 @@ private:
             oss << "computeDenseStereoDepthKeyFramesOnly: True\n";
             oss << "stereoPointCloudStride: 5\n";
             oss << "stereoPointCloudMinDepth: " << minDepth << "\n";
-        }
-
-        if (outputOnImuSamples) {
-            oss << "outputOnFrames: False\n";
         }
 
         return oss.str();
@@ -265,10 +260,6 @@ private:
         }
         vioApi->addGyro(time, {msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z});
         vioApi->addAcc(time, {msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z});
-        if (outputOnImuSamples && (time - previousTriggerTime) > (1. / maxOdomFreq)) {
-            vioApi->addTrigger(time, triggerCounter++);
-            previousTriggerTime = time;
-        }
         previousImuTime = time;
     }
 
@@ -455,6 +446,12 @@ private:
     }
 
     void vioOutputCallback(spectacularAI::VioOutputPtr vioOutput) {
+        double delta = vioOutput->pose.time - previousOutputTime;
+        previousOutputTime = vioOutput->pose.time;
+        if (maxOdomFreq > 0.0 && delta < (1. / maxOdomFreq)) {
+            return;
+        }
+
         if (vioOutput->status == spectacularAI::TrackingStatus::TRACKING) {
             if (poseHelper) {
                 spectacularAI::Pose odomPose;
@@ -638,14 +635,12 @@ private:
 
     double previousFrameTime = 0.0;
     double previousImuTime = 0.0;
-    double previousTriggerTime = 0.0;
+    double previousOutputTime = 0.0;
 
     int frameNumber = 0;
     int64_t latestKeyFrame = -1;
     std::vector<spectacularAI::MonocularFeature> monoFeatures;
-    bool outputOnImuSamples;
     bool recordingOnly;
-    uint64_t triggerCounter = 1;
 
     std::atomic_bool receivedFrames;
     double imuStartTime = -1.;
