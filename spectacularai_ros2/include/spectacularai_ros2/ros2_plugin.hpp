@@ -121,7 +121,7 @@ public:
         // Output frames
         fixedFrameId = declareAndReadParameterString("fixed_frame_id", "map");
         odometryFrameId = declareAndReadParameterString("odometry_frame_id", "odom");
-        baseLinkFrameId = declareAndReadParameterString("base_link_frame_id", "base_link");
+        baseLinkFrameId = declareAndReadParameterString("base_link_frame_id", "base_footprint");
 
         depthScale = declareAndReadParameterDouble("depth_scale", 1.0 / 1000.0);
         recordingFolder = declareAndReadParameterString("recording_folder", "");
@@ -153,7 +153,7 @@ public:
             poseHelper = std::make_unique<PoseHelper>(1.0 / maxOdomCorrectionFreq);
         }
 
-        // odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
+        odometryPublisher = this->create_publisher<nav_msgs::msg::Odometry>("output/odometry", ODOM_QUEUE_SIZE);
         if (enableOccupancyGrid) occupancyGridPublisher = this->create_publisher<nav_msgs::msg::OccupancyGrid>("output/occupancyGrid", ODOM_QUEUE_SIZE);
         if (enableMapping) pointCloudPublisher = this->create_publisher<sensor_msgs::msg::PointCloud2>("output/pointcloud", ODOM_QUEUE_SIZE);
         if (publishPaths) {
@@ -471,8 +471,11 @@ private:
             }
             if (vioPathPublisher) vioPathPublisher->addPose(vioOutput->pose);
 
-            // odometryPublisher->publish(outputToOdometryMsg(vioOutput, vioOutputParentFrameId, vioOutputChildFrameId));
+            odometryPublisher->publish(outputToOdometryMsg(vioOutput, fixedFrameId, baseLinkFrameId));
             // RCLCPP_INFO(this->get_logger(), "Output: %s", vioOutput->asJson().c_str());
+        }
+        else{
+            RCLCPP_INFO(this->get_logger(),"not in tracking state !");
         }
     }
 
@@ -608,7 +611,7 @@ private:
     std::unique_ptr<TrajectoryPublisher> correctedPathPublisher;
     std::unique_ptr<TrajectoryPublisher> vioPathPublisher;
 
-    // rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometryPublisher;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointCloudPublisher;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancyGridPublisher;
 
