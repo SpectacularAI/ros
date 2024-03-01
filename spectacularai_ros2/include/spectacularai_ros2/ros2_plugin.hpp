@@ -417,8 +417,8 @@ private:
         }
 
         monoFeatures.clear();
-        monoFeatures.resize(features->features.size());
         for (auto& ft : features->features) {
+            if (ft.id == 0) continue; // There seems to be a lot of points with id=0, pos=0,0
             monoFeatures.push_back({ int(ft.id), { float(ft.position.x), float(ft.position.y) } });
         }
 
