@@ -17,7 +17,7 @@
       i_set_isp_scale: false
       i_width: 640
       i_height: 400
-      i_fps: 10.0
+      i_fps: 20.0
       i_sensor_img_orientation: AUTO
     right:
       i_fsync_continuous: true
@@ -29,7 +29,7 @@
       i_set_isp_scale: false
       i_width: 640
       i_height: 400
-      i_fps: 10.0
+      i_fps: 20.0
     # imu:
     #   i_batch_report_threshold: 15
     #   i_max_batch_reports: 15
@@ -41,8 +41,8 @@
       i_max_batch_reports: 5
       i_message_type: IMU
       i_sync_method: COPY
-      i_gyro_freq: 100
-      i_acc_freq: 100
+      i_gyro_freq: 200
+      i_acc_freq: 200
     stereo:
       i_align_depth: true
       i_board_socket_id: 2
