@@ -8,6 +8,14 @@ SDK_PACKAGE=$1
 ROOT=$(pwd)
 TMP="$ROOT/tmp"
 
+cleanup_tmp () {
+    # Delete the temporary static library installation and build dir
+    rm -rf "$TMP"
+    rm -rf "$ROOT/spectacularai_ros2/build"
+    echo "Cleanup done"
+}
+trap cleanup_tmp EXIT
+
 # Install the static library SDK variant into a temporary location
 mkdir -p "$TMP/unpack"
 cp "$SDK_PACKAGE" "$TMP/unpack/"
@@ -27,7 +35,3 @@ strip "$INSTALL_DIR/lib/libspectacularai_ros2.so"
 LICENSE_OUTPUT_DIR="$INSTALL_DIR"
 mkdir -p "$LICENSE_OUTPUT_DIR"
 cp $TMP/install/share/doc/spectacularAI/LICENSE "$LICENSE_OUTPUT_DIR/LICENSE.txt"
-
-# Delete the temporary static library installation and build dir
-rm -rf "$TMP"
-rm -rf "spectacularai_ros2/build"
