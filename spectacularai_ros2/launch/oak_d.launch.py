@@ -59,7 +59,6 @@ def launch_setup(context, *args, **kwargs):
                         {"recording_only": LaunchConfiguration('recording_only').perform(context) == "true"},
                         {"enable_mapping": True},
                         {"enable_occupancy_grid": True},
-                        {"output_on_imu_samples": False},
                         {"device_model": LaunchConfiguration('device_model').perform(context)}, # Used to fetch imu to camera transformation
                         {"imu_to_cam0": LaunchConfiguration('imu_to_cam0').perform(context)},
                         {"imu_to_cam1": LaunchConfiguration('imu_to_cam1').perform(context)},
